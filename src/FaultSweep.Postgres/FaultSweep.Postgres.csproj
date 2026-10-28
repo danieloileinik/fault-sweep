@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Automatic Npgsql runtime instrumentation for FaultSweep, independent of connection creation.</Description>
+    <Version>0.1.0</Version>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FaultSweep/FaultSweep.csproj" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="MonoMod.RuntimeDetour" Version="25.3.6" />
+  </ItemGroup>
+</Project>

@@ -1,10 +1,12 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/FaultSweep.Kafka/FaultSweep.Kafka.csproj" />
+    <Project Path="src/FaultSweep.Postgres/FaultSweep.Postgres.csproj" />
     <Project Path="src/FaultSweep/FaultSweep.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FaultSweep.Kafka.Tests/FaultSweep.Kafka.Tests.csproj" />
+    <Project Path="tests/FaultSweep.Postgres.Tests/FaultSweep.Postgres.Tests.csproj" />
     <Project Path="tests/FaultSweep.Tests/FaultSweep.Tests.csproj" />
   </Folder>
 </Solution>
