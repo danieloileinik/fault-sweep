@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <Version>1.0.0</Version>
+    <Authors>Daniil Oleinic</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>testing;idempotency;fault-injection;messaging;dotnet</PackageTags>
+    <PackageProjectUrl>https://github.com/danieloileinik/fault-sweep</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/danieloileinik/fault-sweep</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Description Condition="'$(Description)' == ''">FaultSweep message handler fault injection and recovery verification.</Description>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>
