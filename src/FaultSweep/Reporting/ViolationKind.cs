@@ -6,5 +6,6 @@ public enum ViolationKind
     None = 0,
     StateMismatch = 1,
     RedeliveryLimitExceeded = 2,
-    FaultNotReached = 4
+    FaultNotReached = 4,
+    InvariantFailed = 8
 }

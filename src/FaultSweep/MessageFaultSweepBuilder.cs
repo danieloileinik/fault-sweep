@@ -1,6 +1,7 @@
 using FaultSweep.Execution;
 using FaultSweep.Reporting;
 using FaultSweep.Snapshots;
+using FaultSweep.Verification;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace FaultSweep;
@@ -11,8 +12,12 @@ public sealed class FaultSweepBuilder<THandler, TMessage> where THandler : class
     private readonly TMessage message;
     private readonly List<SnapshotRegistration> snapshots = [];
     private readonly List<Action<IServiceProvider>> validations = [];
+    private readonly List<InvariantRegistration<TMessage>> invariants = [];
+    private readonly Dictionary<string, Func<TMessage, StateSnapshot>> expectedStates = new(StringComparer.Ordinal);
     private Func<IServiceProvider, CancellationToken, ValueTask>? reset;
     private Func<THandler, TMessage, CancellationToken, ValueTask>? handle;
+    private ReplayScenario? replay;
+    private MessageMinimizer<TMessage>? minimizer;
     private FaultSweepOptions options = new FaultSweepOptions();
 
     internal FaultSweepBuilder(IServiceProvider services, TMessage message)
@@ -70,6 +75,72 @@ public sealed class FaultSweepBuilder<THandler, TMessage> where THandler : class
             (provider, token) => provider.GetRequiredService<TProvider>().CaptureAsync(token), comparison);
     }
 
+    /// <summary>Replaces the clean-run oracle for a tracked snapshot. Also verifies the clean run itself.</summary>
+    public FaultSweepBuilder<THandler, TMessage> ExpectState(string name, StateSnapshot expected)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        return ExpectState(name, _ => expected);
+    }
+
+    /// <summary>Derives expected state from the current message, including during message minimization.</summary>
+    public FaultSweepBuilder<THandler, TMessage> ExpectState(string name, Func<TMessage, StateSnapshot> expected)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(expected);
+        if (!expectedStates.TryAdd(name, expected))
+        {
+            throw new ArgumentException($"Expected state for '{name}' is already registered.", nameof(name));
+        }
+
+        return this;
+    }
+
+    /// <summary>Checks a read-only business rule after the clean run and every fault scenario.</summary>
+    public FaultSweepBuilder<THandler, TMessage> CheckInvariant(string name,
+        Func<VerificationContext<TMessage>, bool> condition, string? failureMessage = null)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+        return CheckInvariantAsync(name, (context, _) => ValueTask.FromResult(condition(context)), failureMessage);
+    }
+
+    /// <summary>Supports read-only asynchronous queries through a separate verification scope.</summary>
+    public FaultSweepBuilder<THandler, TMessage> CheckInvariantAsync(string name,
+        Func<VerificationContext<TMessage>, CancellationToken, ValueTask<bool>> condition, string? failureMessage = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(condition);
+        if (invariants.Any(invariant => string.Equals(invariant.Name, name, StringComparison.Ordinal)))
+        {
+            throw new ArgumentException($"Invariant '{name}' is already registered.", nameof(name));
+        }
+
+        invariants.Add(new InvariantRegistration<TMessage>(name, condition, failureMessage ?? "The invariant returned false."));
+        return this;
+    }
+
+    public FaultSweepBuilder<THandler, TMessage> ReplayScenario(ReplayScenario scenario)
+    {
+        ArgumentNullException.ThrowIfNull(scenario);
+        ArgumentOutOfRangeException.ThrowIfLessThan(scenario.EffectIndex, 1);
+        if (!Enum.IsDefined(scenario.Kind) || scenario.MaxRedeliveryAttempts is < 1)
+        {
+            throw new ArgumentException("Invalid replay scenario.", nameof(scenario));
+        }
+
+        replay = scenario;
+        return this;
+    }
+
+    /// <summary>Explores strictly smaller messages according to a deterministic, nonnegative complexity measure.</summary>
+    public FaultSweepBuilder<THandler, TMessage> MinimizeMessageWith(
+        Func<TMessage, IEnumerable<TMessage>> shrink, Func<TMessage, long> complexity)
+    {
+        ArgumentNullException.ThrowIfNull(shrink);
+        ArgumentNullException.ThrowIfNull(complexity);
+        minimizer = new MessageMinimizer<TMessage>(shrink, complexity);
+        return this;
+    }
+
     public Task<FaultSweepResult> RunAsync(CancellationToken cancellationToken = default)
     {
         if (reset is null)
@@ -77,9 +148,22 @@ public sealed class FaultSweepBuilder<THandler, TMessage> where THandler : class
             throw new InvalidOperationException("Configure ResetWith to reset and seed all tracked state.");
         }
 
-        if (snapshots.Count == 0)
+        if (snapshots.Count == 0 && (options.CompareWithBaseline || invariants.Count == 0))
         {
             throw new InvalidOperationException("Track at least one state snapshot before running a sweep.");
+        }
+
+        if (!options.CompareWithBaseline && expectedStates.Count == 0 && invariants.Count == 0)
+        {
+            throw new InvalidOperationException("Configure expected state or an invariant when baseline comparison is disabled.");
+        }
+
+        foreach (string name in expectedStates.Keys)
+        {
+            if (!snapshots.Any(snapshot => string.Equals(snapshot.Name, name, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException($"Expected state '{name}' requires a tracked snapshot with the same name.");
+            }
         }
 
         Func<THandler, TMessage, CancellationToken, ValueTask> invoke = handle ?? InvokeHandlerAsync;
@@ -96,7 +180,9 @@ public sealed class FaultSweepBuilder<THandler, TMessage> where THandler : class
         EffectInterceptor interceptor = services.GetService<EffectInterceptor>()
             ?? throw new InvalidOperationException("Register FaultSweep with services.AddFaultSweep().");
         var runner = new SweepRunner<THandler, TMessage>(
-            services, interceptor, message, invoke, reset, [.. snapshots], options.ValidateAndCopy());
+            services, interceptor, message, invoke, reset, [.. snapshots], [.. invariants],
+            new Dictionary<string, Func<TMessage, StateSnapshot>>(expectedStates, StringComparer.Ordinal),
+            options.ValidateAndCopy(), replay, minimizer);
         return runner.RunAsync(cancellationToken);
     }
 

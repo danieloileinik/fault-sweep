@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
+using System.Text.Json;
 using FaultSweep.Effects;
 using FaultSweep.Reporting;
 using FaultSweep.Snapshots;
+using FaultSweep.Verification;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace FaultSweep.Execution;
@@ -13,7 +15,11 @@ internal sealed class SweepRunner<THandler, TMessage>(
     Func<THandler, TMessage, CancellationToken, ValueTask> handle,
     Func<IServiceProvider, CancellationToken, ValueTask> reset,
     IReadOnlyList<SnapshotRegistration> snapshots,
-    FaultSweepOptions options) where THandler : class
+    IReadOnlyList<InvariantRegistration<TMessage>> invariants,
+    IReadOnlyDictionary<string, Func<TMessage, StateSnapshot>> expectedStates,
+    FaultSweepOptions options,
+    ReplayScenario? replay = null,
+    MessageMinimizer<TMessage>? minimizer = null) where THandler : class
 {
     public async Task<FaultSweepResult> RunAsync(CancellationToken cancellationToken)
     {
@@ -22,34 +28,10 @@ internal sealed class SweepRunner<THandler, TMessage>(
         {
             using var instrumentation = new EffectInstrumentationScope(
                 services.GetServices<IEffectInstrumentation>(), interceptor);
-            await ResetAsync(cancellationToken).ConfigureAwait(false);
-            var baselineSession = new EffectSession(1, options.MaxEffects);
-            DeliveryAttempt baseline = await DeliverAsync(baselineSession, 1, cancellationToken).ConfigureAwait(false);
-            if (!baseline.Succeeded)
-            {
-                throw new FaultSweepExecutionException("The clean baseline delivery failed.", baseline.Error!);
-            }
-
-            if (baselineSession.Trace.Count == 0 && !options.AllowEmptyTrace)
-            {
-                throw new FaultSweepExecutionException(
-                    "The baseline recorded no effects. Instrument the handler or explicitly allow an empty trace. " +
-                    "Enable the provider's FaultSweep instrumentation in the test configuration.");
-            }
-
-            IReadOnlyDictionary<string, StateSnapshot> baselineState = await CaptureAsync(cancellationToken).ConfigureAwait(false);
-            EffectPoint[] points = baselineSession.Trace.Select(entry => entry.Point).ToArray();
-            List<FaultScenarioResult> scenarios = [];
-            foreach (EffectPoint point in points)
-            {
-                foreach (FaultKind kind in options.FaultKinds)
-                {
-                    var scenario = new FaultScenario(point, kind);
-                    scenarios.Add(await RunScenarioAsync(scenario, points, baselineState, cancellationToken).ConfigureAwait(false));
-                }
-            }
-
-            return new FaultSweepResult(baselineState, baselineSession.Trace, scenarios);
+            FaultSweepResult result = (await RunOnceAsync(message, false, cancellationToken).ConfigureAwait(false))!;
+            await MinimizeAsync(result, cancellationToken).ConfigureAwait(false);
+            AttachRegressionTests(result, message);
+            return result;
         }
         finally
         {
@@ -57,34 +39,100 @@ internal sealed class SweepRunner<THandler, TMessage>(
         }
     }
 
+    private async Task<FaultSweepResult?> RunOnceAsync(TMessage runMessage, bool candidate, CancellationToken cancellationToken)
+    {
+        Dictionary<string, StateSnapshot> expected = expectedStates.ToDictionary(pair => pair.Key,
+            pair => pair.Value(runMessage) ?? throw new FaultSweepExecutionException($"Expected state '{pair.Key}' returned null."),
+            StringComparer.Ordinal);
+        await ResetAsync(cancellationToken).ConfigureAwait(false);
+        var baselineSession = new EffectSession(1, options.MaxEffects);
+        DeliveryAttempt baseline = await DeliverAsync(baselineSession, 1, runMessage, cancellationToken).ConfigureAwait(false);
+        if (!baseline.Succeeded)
+        {
+            if (candidate)
+            {
+                return null;
+            }
+
+            throw new FaultSweepExecutionException("The clean baseline delivery failed.", baseline.Error!);
+        }
+
+        if (baselineSession.Trace.Count == 0 && !options.AllowEmptyTrace)
+        {
+            if (candidate)
+            {
+                return null;
+            }
+
+            throw new FaultSweepExecutionException(
+                    "The baseline recorded no effects. Instrument the handler or explicitly allow an empty trace. " +
+                    "Enable the provider's FaultSweep instrumentation in the test configuration.");
+        }
+
+        IReadOnlyDictionary<string, StateSnapshot> baselineState = await CaptureAsync(cancellationToken).ConfigureAwait(false);
+        VerificationResult baselineVerification = await VerifyAsync(runMessage, baselineState, expected, null,
+            null, [baseline], cancellationToken).ConfigureAwait(false);
+        if (candidate && baselineVerification.HasViolations)
+        {
+            return null;
+        }
+
+        EffectPoint[] points = baselineSession.Trace.Select(entry => entry.Point).ToArray();
+        List<FaultScenarioResult> scenarios = [];
+        if (replay is not null && (replay.EffectIndex > points.Length ||
+            replay.ExpectedEffect is not null && points[replay.EffectIndex - 1].Effect != replay.ExpectedEffect))
+        {
+            if (candidate)
+            {
+                return null;
+            }
+
+            throw new FaultSweepExecutionException("The replay effect does not match the clean baseline trace.");
+        }
+        IReadOnlyCollection<FaultKind> faultKinds = replay is null ? options.FaultKinds : [replay.Kind];
+        foreach (EffectPoint point in points.Where(point => replay is null || point.Index == replay.EffectIndex))
+        {
+            foreach (FaultKind kind in faultKinds)
+            {
+                var scenario = new FaultScenario(point, kind);
+                scenarios.Add(await RunScenarioAsync(scenario, points, baselineState, expected, runMessage, cancellationToken).ConfigureAwait(false));
+            }
+        }
+
+        return new FaultSweepResult(baselineState, baselineSession.Trace, baselineVerification, scenarios);
+    }
+
     private async Task<FaultScenarioResult> RunScenarioAsync(FaultScenario scenario,
         IReadOnlyList<EffectPoint> baselinePoints, IReadOnlyDictionary<string, StateSnapshot> baselineState,
-        CancellationToken cancellationToken)
+        IReadOnlyDictionary<string, StateSnapshot> expected,
+        TMessage runMessage, CancellationToken cancellationToken)
     {
         await ResetAsync(cancellationToken).ConfigureAwait(false);
         var initialSession = new EffectSession(1, options.MaxEffects, scenario, baselinePoints);
         List<DeliveryAttempt> attempts =
-            [await DeliverAsync(initialSession, 1, cancellationToken).ConfigureAwait(false)];
+            [await DeliverAsync(initialSession, 1, runMessage, cancellationToken).ConfigureAwait(false)];
         List<EffectTraceEntry> trace = [.. initialSession.Trace];
 
-        for (int retry = 1; !attempts[^1].Succeeded && retry <= options.MaxRedeliveryAttempts; retry++)
+        for (int retry = 1; !attempts[^1].Succeeded && retry <= (replay?.MaxRedeliveryAttempts ?? options.MaxRedeliveryAttempts); retry++)
         {
             var session = new EffectSession(retry + 1, options.MaxEffects);
-            attempts.Add(await DeliverAsync(session, retry + 1, cancellationToken).ConfigureAwait(false));
+            attempts.Add(await DeliverAsync(session, retry + 1, runMessage, cancellationToken).ConfigureAwait(false));
             trace.AddRange(session.Trace);
         }
 
         IReadOnlyDictionary<string, StateSnapshot> state = await CaptureAsync(cancellationToken).ConfigureAwait(false);
-        List<SnapshotDifference> differences = [];
-        foreach (SnapshotRegistration snapshot in snapshots.OrderBy(snapshot => snapshot.Name, StringComparer.Ordinal))
-        {
-            differences.AddRange(snapshot.Comparer.Compare(snapshot.Name, baselineState[snapshot.Name], state[snapshot.Name]));
-        }
+        VerificationResult verification = await VerifyAsync(runMessage, state, expected, baselineState,
+            scenario, attempts.AsReadOnly(), cancellationToken).ConfigureAwait(false);
 
         ViolationKind violations = ViolationKind.None;
-        if (differences.Count > 0)
+        if (verification.Differences.Count > 0)
         {
             violations |= ViolationKind.StateMismatch;
+        }
+
+        if (verification.InvariantViolations.Count > 0)
+        {
+            violations |= ViolationKind.InvariantFailed;
         }
 
         if (!attempts[^1].Succeeded)
@@ -97,10 +145,53 @@ internal sealed class SweepRunner<THandler, TMessage>(
             violations |= ViolationKind.FaultNotReached;
         }
 
-        return new FaultScenarioResult(scenario, violations, attempts, trace, state, differences);
+        return new FaultScenarioResult(scenario, violations, attempts, trace, state, verification);
     }
 
-    private async ValueTask<DeliveryAttempt> DeliverAsync(EffectSession session, int attempt,
+    private async ValueTask<VerificationResult> VerifyAsync(TMessage runMessage,
+        IReadOnlyDictionary<string, StateSnapshot> state, IReadOnlyDictionary<string, StateSnapshot> expected,
+        IReadOnlyDictionary<string, StateSnapshot>? baselineState, FaultScenario? scenario,
+        IReadOnlyList<DeliveryAttempt> attempts, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        List<SnapshotDifference> differences = [];
+        foreach (SnapshotRegistration snapshot in snapshots.OrderBy(snapshot => snapshot.Name, StringComparer.Ordinal))
+        {
+            StateSnapshot? reference = expected.GetValueOrDefault(snapshot.Name)
+                ?? (options.CompareWithBaseline ? baselineState?.GetValueOrDefault(snapshot.Name) : null);
+            if (reference is not null)
+            {
+                differences.AddRange(snapshot.Comparer.Compare(snapshot.Name, reference, state[snapshot.Name]));
+            }
+        }
+
+        List<InvariantViolation> failures = [];
+        if (invariants.Count > 0)
+        {
+            await using AsyncServiceScope scope = services.CreateAsyncScope();
+            var context = new VerificationContext<TMessage>(runMessage, scope.ServiceProvider, state, scenario, attempts);
+            foreach (InvariantRegistration<TMessage> invariant in invariants)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (!await invariant.Check(context, cancellationToken).ConfigureAwait(false))
+                    {
+                        failures.Add(new InvariantViolation(invariant.Name, invariant.FailureMessage));
+                    }
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    failures.Add(new InvariantViolation(invariant.Name, exception.Message, exception));
+                }
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return new VerificationResult(differences, failures);
+    }
+
+    private async ValueTask<DeliveryAttempt> DeliverAsync(EffectSession session, int attempt, TMessage runMessage,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -110,7 +201,7 @@ internal sealed class SweepRunner<THandler, TMessage>(
             // Disposal is part of a delivery: open transactions are rolled back before redelivery.
             await using AsyncServiceScope scope = services.CreateAsyncScope();
             await interceptor.RunAsync(session, () =>
-                handle(scope.ServiceProvider.GetRequiredService<THandler>(), message, cancellationToken)).ConfigureAwait(false);
+                handle(scope.ServiceProvider.GetRequiredService<THandler>(), runMessage, cancellationToken)).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -125,6 +216,122 @@ internal sealed class SweepRunner<THandler, TMessage>(
 
         error = session.Crash ?? error;
         return new DeliveryAttempt(attempt, error is null, error);
+    }
+
+    private static FaultScenarioResult? Smallest(FaultSweepResult result) => result.Violations
+        .OrderBy(item => item.Scenario.Point.Index).ThenBy(item => item.Attempts.Count).ThenBy(item => item.Scenario.Kind).FirstOrDefault();
+
+    private async Task MinimizeAsync(FaultSweepResult original, CancellationToken token)
+    {
+        // A fault scenario is meaningful only when the original and shrunken clean runs satisfy the business rules.
+        if (original.BaselineVerification.HasViolations)
+        {
+            return;
+        }
+
+        FaultScenarioResult? smallest = Smallest(original);
+        if (smallest is null)
+        {
+            return;
+        }
+
+        TMessage bestMessage = message;
+        int evaluated = 0;
+        bool exhausted = false;
+        if (minimizer is not null)
+        {
+            long score = minimizer.Complexity(bestMessage);
+            ArgumentOutOfRangeException.ThrowIfNegative(score);
+            while (evaluated < options.MaxMinimizationRuns)
+            {
+                bool improved = false;
+                // Only a strictly smaller candidate may replace the current message; cycles cannot keep the search alive.
+                foreach (TMessage candidate in minimizer.Shrink(bestMessage))
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (evaluated >= options.MaxMinimizationRuns)
+                    {
+                        exhausted = true;
+                        break;
+                    }
+                    evaluated++;
+                    long candidateScore = minimizer.Complexity(candidate);
+                    if (candidateScore < 0 || candidateScore >= score)
+                    {
+                        continue;
+                    }
+
+                    FaultSweepResult? candidateResult = await RunOnceAsync(candidate, true, token).ConfigureAwait(false);
+                    FaultScenarioResult? candidateViolation = candidateResult is null ? null : Smallest(candidateResult);
+                    if (candidateViolation is null)
+                    {
+                        continue;
+                    }
+
+                    bestMessage = candidate;
+                    score = candidateScore;
+                    smallest = candidateViolation;
+                    improved = true;
+                }
+                if (!improved)
+                {
+                    break;
+                }
+            }
+            exhausted |= evaluated >= options.MaxMinimizationRuns;
+        }
+        original.MinimalScenario = new MinimizedScenario(smallest, SerializeMessage(bestMessage),
+            CSharpTypeName.Format(typeof(TMessage)), evaluated, exhausted);
+        IRegressionTestGenerator? generator = services.GetService<IRegressionTestGenerator>();
+        if (generator is not null)
+        {
+            smallest.RegressionTest = generator.Generate(CreateCase(bestMessage, smallest));
+        }
+    }
+
+    private void AttachRegressionTests(FaultSweepResult result, TMessage runMessage)
+    {
+        if (result.BaselineVerification.HasViolations)
+        {
+            result.BaselineRegressionCase = new RegressionTestCase(SerializeMessage(runMessage), CSharpTypeName.Format(typeof(TMessage)), null);
+        }
+
+        IRegressionTestGenerator? generator = services.GetService<IRegressionTestGenerator>();
+        if (generator is null)
+        {
+            return;
+        }
+
+        if (result.BaselineRegressionCase is { } baselineCase)
+        {
+            result.BaselineRegressionTest = generator.Generate(baselineCase);
+        }
+
+        foreach (FaultScenarioResult violation in result.Violations)
+        {
+            violation.RegressionTest ??= generator.Generate(CreateCase(runMessage, violation));
+        }
+    }
+
+    private RegressionTestCase CreateCase(TMessage runMessage, FaultScenarioResult violation) => new RegressionTestCase(
+        SerializeMessage(runMessage), CSharpTypeName.Format(typeof(TMessage)),
+        new ReplayScenario(violation.Scenario.Point.Index, violation.Scenario.Kind,
+            violation.Attempts.Count > 1 ? violation.Attempts.Count - 1 : 1, violation.Scenario.Point.Effect));
+
+    private static string? SerializeMessage(TMessage value)
+    {
+        try
+        {
+            return JsonSerializer.Serialize(value);
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private async ValueTask ResetAsync(CancellationToken cancellationToken)

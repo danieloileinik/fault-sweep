@@ -1,15 +1,18 @@
 using FaultSweep.Effects;
 using FaultSweep.Snapshots;
+using FaultSweep.Verification;
 
 namespace FaultSweep.Reporting;
 
 public sealed class FaultSweepResult
 {
     internal FaultSweepResult(IReadOnlyDictionary<string, StateSnapshot> baselineState,
-        IEnumerable<EffectTraceEntry> baselineTrace, IEnumerable<FaultScenarioResult> scenarios)
+        IEnumerable<EffectTraceEntry> baselineTrace, VerificationResult baselineVerification,
+        IEnumerable<FaultScenarioResult> scenarios)
     {
         BaselineState = baselineState;
         BaselineTrace = Array.AsReadOnly(baselineTrace.ToArray());
+        BaselineVerification = baselineVerification;
         Scenarios = Array.AsReadOnly(scenarios.ToArray());
         Violations = Array.AsReadOnly(Scenarios.Where(scenario => scenario.HasViolation).ToArray());
     }
@@ -18,11 +21,19 @@ public sealed class FaultSweepResult
 
     public IReadOnlyList<EffectTraceEntry> BaselineTrace { get; }
 
+    public VerificationResult BaselineVerification { get; }
+
+    public RegressionTestCase? BaselineRegressionCase { get; internal set; }
+
+    public string? BaselineRegressionTest { get; internal set; }
+
     public IReadOnlyList<FaultScenarioResult> Scenarios { get; }
 
     public IReadOnlyList<FaultScenarioResult> Violations { get; }
 
-    public bool HasViolations => Violations.Count > 0;
+    public MinimizedScenario? MinimalScenario { get; internal set; }
+
+    public bool HasViolations => BaselineVerification.HasViolations || Violations.Count > 0;
 
     public void ShouldHaveNoViolations()
     {
