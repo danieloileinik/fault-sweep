@@ -23,42 +23,61 @@ public sealed class VerificationRegressionFixture : IDisposable
 
     public bool Fixed { get; set; }
 
-    public static XunitRegressionOptions Options { get; } = new XunitRegressionOptions
-    {
-        FixtureTypeName = "global::FaultSweep.Redis.Tests.VerificationRegressionFixture",
-        CollectionName = "Business verification",
-        Namespace = "Generated"
-    };
+    public static XunitRegressionOptions Options { get; } =
+        new XunitRegressionOptions
+        {
+            FixtureTypeName = "global::FaultSweep.Redis.Tests.VerificationRegressionFixture",
+            CollectionName = "Business verification",
+            Namespace = "Generated",
+        };
 
     public FaultSweepBuilder<MinimizeHandler, MinimizeRequest> CreateSweep(MinimizeRequest message)
     {
-        return FaultSweep.For<MinimizeHandler>(services).WithMessage(message)
-            .ResetWith((_, _) =>
-            {
-                state.Value = 0;
-                return ValueTask.CompletedTask;
-            })
-            .HandleWith((_, request, token) => services.GetRequiredService<IEffectInterceptor>()
-                .ExecuteAsync(new EffectDescriptor("memory", "debit"), _ =>
+        return FaultSweep
+            .For<MinimizeHandler>(services)
+            .WithMessage(message)
+            .ResetWith(
+                (_, _) =>
                 {
-                    if (Fixed)
-                    {
-                        state.Value = request.Amount;
-                    }
-                    else if (baselineBroken)
-                    {
-                        state.Value = request.Amount + 1;
-                    }
-                    else
-                    {
-                        state.Value += request.Amount;
-                    }
-
+                    state.Value = 0;
                     return ValueTask.CompletedTask;
-                }, token))
+                }
+            )
+            .HandleWith(
+                (_, request, token) =>
+                    services
+                        .GetRequiredService<IEffectInterceptor>()
+                        .ExecuteAsync(
+                            new EffectDescriptor("memory", "debit"),
+                            _ =>
+                            {
+                                if (Fixed)
+                                {
+                                    state.Value = request.Amount;
+                                }
+                                else if (baselineBroken)
+                                {
+                                    state.Value = request.Amount + 1;
+                                }
+                                else
+                                {
+                                    lock (state)
+                                    {
+                                        state.Value += request.Amount;
+                                    }
+                                }
+
+                                return ValueTask.CompletedTask;
+                            },
+                            token
+                        )
+            )
             .TrackState("balance", (_, _) => ValueTask.FromResult(StateSnapshot.From(state.Value)))
             .WithOptions(new FaultSweepOptions { CompareWithBaseline = false })
-            .CheckInvariant("exact payment amount", context => context.GetState<int>("balance") == context.Message.Amount);
+            .CheckInvariant(
+                "exact payment amount",
+                context => context.GetState<int>("balance") == context.Message.Amount
+            );
     }
 
     public void Dispose() => services.Dispose();

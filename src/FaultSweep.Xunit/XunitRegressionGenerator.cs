@@ -16,9 +16,17 @@ public sealed class XunitRegressionGenerator : IRegressionTestGenerator
         string[] identifiers = [options.Namespace, options.ClassName, options.FixtureTypeName];
         foreach (string identifier in identifiers)
         {
-            if (!Regex.IsMatch(identifier, @"^(global::)?[A-Za-z_][A-Za-z_0-9]*(\.[A-Za-z_][A-Za-z_0-9]*)*$"))
+            if (
+                !Regex.IsMatch(
+                    identifier,
+                    @"^(global::)?[A-Za-z_][A-Za-z_0-9]*(\.[A-Za-z_][A-Za-z_0-9]*)*$"
+                )
+            )
             {
-                throw new ArgumentException("Regression names must be valid qualified C# identifiers.", nameof(options));
+                throw new ArgumentException(
+                    "Regression names must be valid qualified C# identifiers.",
+                    nameof(options)
+                );
             }
         }
 
@@ -30,19 +38,28 @@ public sealed class XunitRegressionGenerator : IRegressionTestGenerator
         ArgumentNullException.ThrowIfNull(testCase);
         if (testCase.MessageJson is null && options.MessageExpression is null)
         {
-            throw new InvalidOperationException("Supply MessageExpression for a message that cannot be serialized as JSON.");
+            throw new InvalidOperationException(
+                "Supply MessageExpression for a message that cannot be serialized as JSON."
+            );
         }
 
         string messageType = options.MessageTypeName ?? testCase.MessageTypeName;
-        string expression = options.MessageExpression ?? $"global::System.Text.Json.JsonSerializer.Deserialize<{messageType}>({Literal(testCase.MessageJson!)})!";
+        string expression =
+            options.MessageExpression
+            ?? $"global::System.Text.Json.JsonSerializer.Deserialize<{messageType}>({Literal(testCase.MessageJson!)})!";
         ReplayScenario? scenario = testCase.Scenario;
+        if (testCase.Duplicates is { } duplicates)
+        {
+            return GenerateBaseline(messageType, expression, duplicates);
+        }
         if (scenario is null)
         {
             return GenerateBaseline(messageType, expression);
         }
 
-        string expected = scenario.ExpectedEffect is null ? "null" :
-            $"new global::FaultSweep.Effects.EffectDescriptor({Literal(scenario.ExpectedEffect.Source)}, {Literal(scenario.ExpectedEffect.Operation)}, {Literal(scenario.ExpectedEffect.Target)})";
+        string expected = scenario.ExpectedEffect is null
+            ? "null"
+            : $"new global::FaultSweep.Effects.EffectDescriptor({Literal(scenario.ExpectedEffect.Source)}, {Literal(scenario.ExpectedEffect.Operation)}, {Literal(scenario.ExpectedEffect.Target)})";
         return $$"""
             namespace {{options.Namespace}};
 
@@ -55,7 +72,8 @@ public sealed class XunitRegressionGenerator : IRegressionTestGenerator
                     // Arrange
                     {{messageType}} message = {{expression}};
                     var scenario = new global::FaultSweep.Reporting.ReplayScenario(
-                        {{scenario.EffectIndex}}, global::FaultSweep.FaultKind.{{scenario.Kind}}, {{scenario.MaxRedeliveryAttempts ?? 3}}, {{expected}});
+                        {{scenario.EffectIndex}}, global::FaultSweep.FaultKind.{{scenario.Kind}}, {{scenario.MaxRedeliveryAttempts
+                ?? 3}}, {{expected}});
 
                     // Act
                     global::FaultSweep.Reporting.FaultSweepResult result = await fixture.CreateSweep(message)
@@ -69,13 +87,21 @@ public sealed class XunitRegressionGenerator : IRegressionTestGenerator
             """;
     }
 
-    private string GenerateBaseline(string messageType, string expression)
+    private string GenerateBaseline(
+        string messageType,
+        string expression,
+        DuplicateDeliveryMode? duplicates = null
+    )
     {
+        string suffix = duplicates is null ? "Baseline" : "Duplicates_" + duplicates;
+        string run = duplicates is { } mode
+            ? $"fixture.CreateSweep(message).ReplayDuplicates(global::FaultSweep.Reporting.DuplicateDeliveryMode.{mode}).RunAsync()"
+            : "fixture.CreateSweep(message).RunAsync()";
         return $$"""
             namespace {{options.Namespace}};
 
             [global::Xunit.Collection({{Literal(options.CollectionName)}})]
-            public sealed class {{options.ClassName}}_Baseline({{options.FixtureTypeName}} fixture)
+            public sealed class {{options.ClassName}}_{{suffix}}({{options.FixtureTypeName}} fixture)
             {
                 [global::Xunit.Fact]
                 public async global::System.Threading.Tasks.Task ReproducesViolation()
@@ -84,8 +110,7 @@ public sealed class XunitRegressionGenerator : IRegressionTestGenerator
                     {{messageType}} message = {{expression}};
 
                     // Act
-                    global::FaultSweep.Reporting.FaultSweepResult result = await fixture.CreateSweep(message)
-                        .RunAsync();
+                    global::FaultSweep.Reporting.FaultSweepResult result = await {{run}};
 
                     // Assert
                     result.ShouldHaveNoViolations();
@@ -94,5 +119,6 @@ public sealed class XunitRegressionGenerator : IRegressionTestGenerator
             """;
     }
 
-    private static string Literal(string? value) => value is null ? "null" : JsonSerializer.Serialize(value);
+    private static string Literal(string? value) =>
+        value is null ? "null" : JsonSerializer.Serialize(value);
 }
