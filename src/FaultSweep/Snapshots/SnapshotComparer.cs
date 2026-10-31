@@ -17,33 +17,61 @@ internal sealed class SnapshotComparer
         ArgumentNullException.ThrowIfNull(options.ArrayComparisons);
         if (!Enum.IsDefined(options.ArrayComparison))
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "Unknown array comparison mode.");
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                "Unknown array comparison mode."
+            );
         }
 
         ignoredProperties = new HashSet<string>(options.IgnoredProperties, StringComparer.Ordinal);
-        comparers = new Dictionary<string, Func<JsonElement, JsonElement, bool>>(options.Comparers, StringComparer.Ordinal);
+        comparers = new Dictionary<string, Func<JsonElement, JsonElement, bool>>(
+            options.Comparers,
+            StringComparer.Ordinal
+        );
         if (comparers.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null))
         {
-            throw new ArgumentException("Comparators require a nonempty path and a nonnull delegate.", nameof(options));
+            throw new ArgumentException(
+                "Comparators require a nonempty path and a nonnull delegate.",
+                nameof(options)
+            );
         }
 
         arrayComparison = options.ArrayComparison;
-        arrayComparisons = new Dictionary<string, ArrayComparison>(options.ArrayComparisons, StringComparer.Ordinal);
-        if (arrayComparisons.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || !Enum.IsDefined(pair.Value)))
+        arrayComparisons = new Dictionary<string, ArrayComparison>(
+            options.ArrayComparisons,
+            StringComparer.Ordinal
+        );
+        if (
+            arrayComparisons.Any(pair =>
+                string.IsNullOrWhiteSpace(pair.Key) || !Enum.IsDefined(pair.Value)
+            )
+        )
         {
-            throw new ArgumentException("Array comparison modes require a nonempty path and a valid mode.", nameof(options));
+            throw new ArgumentException(
+                "Array comparison modes require a nonempty path and a valid mode.",
+                nameof(options)
+            );
         }
     }
 
-    public IReadOnlyList<SnapshotDifference> Compare(string name, StateSnapshot expected, StateSnapshot actual)
+    public IReadOnlyList<SnapshotDifference> Compare(
+        string name,
+        StateSnapshot expected,
+        StateSnapshot actual
+    )
     {
         List<SnapshotDifference> differences = [];
         CompareValue(name, "$", expected.Value, actual.Value, differences);
         return differences.AsReadOnly();
     }
 
-    private void CompareValue(string name, string path, JsonElement expected, JsonElement actual,
-        List<SnapshotDifference> differences)
+    private void CompareValue(
+        string name,
+        string path,
+        JsonElement expected,
+        JsonElement actual,
+        List<SnapshotDifference> differences
+    )
     {
         if (comparers.TryGetValue(path, out Func<JsonElement, JsonElement, bool>? comparer))
         {
@@ -78,17 +106,34 @@ internal sealed class SnapshotComparer
                 break;
         }
 
-        void AddMismatch() => differences.Add(new SnapshotDifference(
-            name, path, DifferenceKind.ValueMismatch, StateSnapshot.Format(expected), StateSnapshot.Format(actual)));
+        void AddMismatch() =>
+            differences.Add(
+                new SnapshotDifference(
+                    name,
+                    path,
+                    DifferenceKind.ValueMismatch,
+                    StateSnapshot.Format(expected),
+                    StateSnapshot.Format(actual)
+                )
+            );
     }
 
-    private void CompareObjects(string name, string path, JsonElement expected, JsonElement actual,
-        List<SnapshotDifference> differences)
+    private void CompareObjects(
+        string name,
+        string path,
+        JsonElement expected,
+        JsonElement actual,
+        List<SnapshotDifference> differences
+    )
     {
-        string[] names = expected.EnumerateObject().Select(property => property.Name)
+        string[] names = expected
+            .EnumerateObject()
+            .Select(property => property.Name)
             .Concat(actual.EnumerateObject().Select(property => property.Name))
             .Where(property => !ignoredProperties.Contains(property))
-            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
         foreach (string property in names)
         {
@@ -97,13 +142,27 @@ internal sealed class SnapshotComparer
             bool hasActual = actual.TryGetProperty(property, out JsonElement actualValue);
             if (!hasExpected)
             {
-                differences.Add(new SnapshotDifference(name, propertyPath, DifferenceKind.Unexpected,
-                    null, StateSnapshot.Format(actualValue)));
+                differences.Add(
+                    new SnapshotDifference(
+                        name,
+                        propertyPath,
+                        DifferenceKind.Unexpected,
+                        null,
+                        StateSnapshot.Format(actualValue)
+                    )
+                );
             }
             else if (!hasActual)
             {
-                differences.Add(new SnapshotDifference(name, propertyPath, DifferenceKind.Missing,
-                    StateSnapshot.Format(expectedValue), null));
+                differences.Add(
+                    new SnapshotDifference(
+                        name,
+                        propertyPath,
+                        DifferenceKind.Missing,
+                        StateSnapshot.Format(expectedValue),
+                        null
+                    )
+                );
             }
             else
             {
@@ -112,11 +171,18 @@ internal sealed class SnapshotComparer
         }
     }
 
-    private void CompareArrays(string name, string path, JsonElement expected, JsonElement actual,
-        List<SnapshotDifference> differences)
+    private void CompareArrays(
+        string name,
+        string path,
+        JsonElement expected,
+        JsonElement actual,
+        List<SnapshotDifference> differences
+    )
     {
-        ArrayComparison mode = arrayComparisons.GetValueOrDefault(path,
-            path == "$" ? arrayComparison : ArrayComparison.Sequence);
+        ArrayComparison mode = arrayComparisons.GetValueOrDefault(
+            path,
+            path == "$" ? arrayComparison : ArrayComparison.Sequence
+        );
         JsonElement[] expectedItems = expected.EnumerateArray().ToArray();
         JsonElement[] actualItems = actual.EnumerateArray().ToArray();
         if (mode == ArrayComparison.Sequence)
@@ -126,66 +192,203 @@ internal sealed class SnapshotComparer
                 string itemPath = $"{path}[{index}]";
                 if (index >= actualItems.Length)
                 {
-                    differences.Add(new SnapshotDifference(name, itemPath, DifferenceKind.Missing,
-                        StateSnapshot.Format(expectedItems[index]), null));
+                    differences.Add(
+                        new SnapshotDifference(
+                            name,
+                            itemPath,
+                            DifferenceKind.Missing,
+                            StateSnapshot.Format(expectedItems[index]),
+                            null
+                        )
+                    );
                 }
                 else if (index >= expectedItems.Length)
                 {
-                    differences.Add(new SnapshotDifference(name, itemPath, DifferenceKind.Unexpected,
-                        null, StateSnapshot.Format(actualItems[index])));
+                    differences.Add(
+                        new SnapshotDifference(
+                            name,
+                            itemPath,
+                            DifferenceKind.Unexpected,
+                            null,
+                            StateSnapshot.Format(actualItems[index])
+                        )
+                    );
                 }
                 else
                 {
-                    CompareValue(name, itemPath, expectedItems[index], actualItems[index], differences);
+                    CompareValue(
+                        name,
+                        itemPath,
+                        expectedItems[index],
+                        actualItems[index],
+                        differences
+                    );
                 }
             }
 
             return;
         }
 
-        // Equality includes normalization and custom comparators before matching collection members.
-        var matched = new bool[actualItems.Length];
+        if (mode == ArrayComparison.Multiset)
+        {
+            CompareMultiset(name, path, expectedItems, actualItems, differences);
+            return;
+        }
+
         for (int index = 0; index < expectedItems.Length; index++)
         {
-            if (mode == ArrayComparison.Set &&
-                expectedItems.Take(index).Any(item => Equal($"{path}[{index}]", item, expectedItems[index])))
+            if (
+                expectedItems
+                    .Take(index)
+                    .Any(item => Equal($"{path}[{index}]", item, expectedItems[index]))
+            )
             {
                 continue;
             }
 
-            int match = -1;
-            for (int candidate = 0; candidate < actualItems.Length; candidate++)
+            if (!actualItems.Any(item => Equal($"{path}[{index}]", expectedItems[index], item)))
             {
-                if ((mode == ArrayComparison.Set || !matched[candidate]) &&
-                    Equal($"{path}[{index}]", expectedItems[index], actualItems[candidate]))
-                {
-                    match = candidate;
-                    break;
-                }
-            }
-
-            if (match >= 0)
-            {
-                matched[match] = true;
-            }
-            else
-            {
-                differences.Add(new SnapshotDifference(name, $"{path}[{index}]", DifferenceKind.Missing,
-                    StateSnapshot.Format(expectedItems[index]), null));
+                differences.Add(
+                    new SnapshotDifference(
+                        name,
+                        $"{path}[{index}]",
+                        DifferenceKind.Missing,
+                        StateSnapshot.Format(expectedItems[index]),
+                        null
+                    )
+                );
             }
         }
 
         for (int index = 0; index < actualItems.Length; index++)
         {
-            bool present = mode == ArrayComparison.Set
-                ? expectedItems.Any(item => Equal($"{path}[{index}]", item, actualItems[index]))
-                : matched[index];
-            if (!present && (mode != ArrayComparison.Set ||
-                !actualItems.Take(index).Any(item => Equal($"{path}[{index}]", item, actualItems[index]))))
+            bool present = expectedItems.Any(item =>
+                Equal($"{path}[{index}]", item, actualItems[index])
+            );
+            if (
+                !present
+                && !actualItems
+                    .Take(index)
+                    .Any(item => Equal($"{path}[{index}]", item, actualItems[index]))
+            )
             {
-                differences.Add(new SnapshotDifference(name, $"{path}[+{index}]", DifferenceKind.Unexpected,
-                    null, StateSnapshot.Format(actualItems[index])));
+                differences.Add(
+                    new SnapshotDifference(
+                        name,
+                        $"{path}[+{index}]",
+                        DifferenceKind.Unexpected,
+                        null,
+                        StateSnapshot.Format(actualItems[index])
+                    )
+                );
             }
+        }
+    }
+
+    private void CompareMultiset(
+        string name,
+        string path,
+        JsonElement[] expectedItems,
+        JsonElement[] actualItems,
+        List<SnapshotDifference> differences
+    )
+    {
+        int[] actualByExpected = Enumerable.Repeat(-1, expectedItems.Length).ToArray();
+        int[] expectedByActual = Enumerable.Repeat(-1, actualItems.Length).ToArray();
+        for (int index = 0; index < expectedItems.Length; index++)
+        {
+            if (!TryMatch(index))
+            {
+                differences.Add(
+                    new SnapshotDifference(
+                        name,
+                        $"{path}[{index}]",
+                        DifferenceKind.Missing,
+                        StateSnapshot.Format(expectedItems[index]),
+                        null
+                    )
+                );
+            }
+        }
+
+        for (int index = 0; index < actualItems.Length; index++)
+        {
+            if (expectedByActual[index] < 0)
+            {
+                differences.Add(
+                    new SnapshotDifference(
+                        name,
+                        $"{path}[+{index}]",
+                        DifferenceKind.Unexpected,
+                        null,
+                        StateSnapshot.Format(actualItems[index])
+                    )
+                );
+            }
+        }
+
+        bool TryMatch(int expectedIndex)
+        {
+            // Prefer a free match before trying to reassign earlier pairs.
+            for (int candidate = 0; candidate < actualItems.Length; candidate++)
+            {
+                if (
+                    expectedByActual[candidate] < 0
+                    && Equal(
+                        $"{path}[{expectedIndex}]",
+                        expectedItems[expectedIndex],
+                        actualItems[candidate]
+                    )
+                )
+                {
+                    actualByExpected[expectedIndex] = candidate;
+                    expectedByActual[candidate] = expectedIndex;
+                    return true;
+                }
+            }
+
+            int[] previousExpected = Enumerable.Repeat(-1, actualItems.Length).ToArray();
+            var pending = new Queue<int>();
+            pending.Enqueue(expectedIndex);
+            while (pending.TryDequeue(out int current))
+            {
+                for (int candidate = 0; candidate < actualItems.Length; candidate++)
+                {
+                    if (
+                        previousExpected[candidate] >= 0
+                        || !Equal(
+                            $"{path}[{current}]",
+                            expectedItems[current],
+                            actualItems[candidate]
+                        )
+                    )
+                    {
+                        continue;
+                    }
+
+                    previousExpected[candidate] = current;
+                    if (expectedByActual[candidate] >= 0)
+                    {
+                        pending.Enqueue(expectedByActual[candidate]);
+                        continue;
+                    }
+
+                    // Follow the augmenting path back to the unmatched expected item.
+                    int actualIndex = candidate;
+                    while (actualIndex >= 0)
+                    {
+                        int reassignedExpected = previousExpected[actualIndex];
+                        int previousActual = actualByExpected[reassignedExpected];
+                        actualByExpected[reassignedExpected] = actualIndex;
+                        expectedByActual[actualIndex] = reassignedExpected;
+                        actualIndex = previousActual;
+                    }
+
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 
@@ -198,8 +401,10 @@ internal sealed class SnapshotComparer
 
     private static string PropertyPath(string path, string name)
     {
-        return name.Length > 0 && (char.IsAsciiLetter(name[0]) || name[0] == '_') &&
-            name.All(character => char.IsAsciiLetterOrDigit(character) || character == '_')
+        return
+            name.Length > 0
+            && (char.IsAsciiLetter(name[0]) || name[0] == '_')
+            && name.All(character => char.IsAsciiLetterOrDigit(character) || character == '_')
             ? $"{path}.{name}"
             : $"{path}[{JsonSerializer.Serialize(name)}]";
     }
