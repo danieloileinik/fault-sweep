@@ -9,8 +9,11 @@ internal sealed class KafkaMessageCapture
 {
     private readonly AsyncLocal<KafkaCaptureSession?> current = new();
 
-    public KafkaCaptureSession Session => current.Value ?? throw new InvalidOperationException(
-        "The capture producer can only be used inside a FaultSweep run. Register AddFaultSweepKafka<TKey, TValue>().");
+    public KafkaCaptureSession Session =>
+        current.Value
+        ?? throw new InvalidOperationException(
+            "The capture producer can only be used inside a FaultSweep run. Register AddFaultSweepKafka<TKey, TValue>()."
+        );
 
     public IDisposable Activate(IEffectInterceptor interceptor)
     {
@@ -30,9 +33,19 @@ internal sealed class KafkaMessageCapture
 
     public long Add<TKey, TValue>(TopicPartition destination, Message<TKey, TValue> message)
     {
-        var captured = new CapturedKafkaMessage(destination.Topic, destination.Partition.Value,
-            JsonSerializer.SerializeToElement(message.Key), JsonSerializer.SerializeToElement(message.Value),
-            message.Headers?.Select(header => new CapturedKafkaHeader(header.Key, header.GetValueBytes()?.ToArray())).ToArray() ?? []);
+        var captured = new CapturedKafkaMessage(
+            destination.Topic,
+            destination.Partition.Value,
+            JsonSerializer.SerializeToElement((object?)message.Key),
+            JsonSerializer.SerializeToElement((object?)message.Value),
+            message
+                .Headers?.Select(header => new CapturedKafkaHeader(
+                    header.Key,
+                    header.GetValueBytes()?.ToArray()
+                ))
+                .ToArray()
+                ?? []
+        );
         KafkaCaptureSession session = Session;
         lock (session.Gate)
         {
