@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/FaultSweep.Kafka/FaultSweep.Kafka.csproj" />
+    <Project Path="src/FaultSweep.Mongo/FaultSweep.Mongo.csproj" />
     <Project Path="src/FaultSweep.Postgres/FaultSweep.Postgres.csproj" />
     <Project Path="src/FaultSweep.Redis/FaultSweep.Redis.csproj" />
     <Project Path="src/FaultSweep.Xunit/FaultSweep.Xunit.csproj" />
@@ -8,6 +9,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FaultSweep.Kafka.Tests/FaultSweep.Kafka.Tests.csproj" />
+    <Project Path="tests/FaultSweep.Mongo.Tests/FaultSweep.Mongo.Tests.csproj" />
     <Project Path="tests/FaultSweep.Postgres.Tests/FaultSweep.Postgres.Tests.csproj" />
     <Project Path="tests/FaultSweep.Redis.Tests/FaultSweep.Redis.Tests.csproj" />
     <Project Path="tests/FaultSweep.Tests/FaultSweep.Tests.csproj" />
