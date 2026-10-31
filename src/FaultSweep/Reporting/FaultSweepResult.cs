@@ -6,15 +6,23 @@ namespace FaultSweep.Reporting;
 
 public sealed class FaultSweepResult
 {
-    internal FaultSweepResult(IReadOnlyDictionary<string, StateSnapshot> baselineState,
-        IEnumerable<EffectTraceEntry> baselineTrace, VerificationResult baselineVerification,
-        IEnumerable<FaultScenarioResult> scenarios)
+    internal FaultSweepResult(
+        IReadOnlyDictionary<string, StateSnapshot> baselineState,
+        IEnumerable<EffectTraceEntry> baselineTrace,
+        VerificationResult baselineVerification,
+        IEnumerable<FaultScenarioResult> scenarios,
+        IEnumerable<DuplicateScenarioResult> duplicateScenarios
+    )
     {
         BaselineState = baselineState;
         BaselineTrace = Array.AsReadOnly(baselineTrace.ToArray());
         BaselineVerification = baselineVerification;
         Scenarios = Array.AsReadOnly(scenarios.ToArray());
         Violations = Array.AsReadOnly(Scenarios.Where(scenario => scenario.HasViolation).ToArray());
+        DuplicateScenarios = Array.AsReadOnly(duplicateScenarios.ToArray());
+        DuplicateViolations = Array.AsReadOnly(
+            DuplicateScenarios.Where(scenario => scenario.HasViolation).ToArray()
+        );
     }
 
     public IReadOnlyDictionary<string, StateSnapshot> BaselineState { get; }
@@ -33,7 +41,14 @@ public sealed class FaultSweepResult
 
     public MinimizedScenario? MinimalScenario { get; internal set; }
 
-    public bool HasViolations => BaselineVerification.HasViolations || Violations.Count > 0;
+    public IReadOnlyList<DuplicateScenarioResult> DuplicateScenarios { get; }
+
+    public IReadOnlyList<DuplicateScenarioResult> DuplicateViolations { get; }
+
+    public MinimizedDuplicateScenario? MinimalDuplicateScenario { get; internal set; }
+
+    public bool HasViolations =>
+        BaselineVerification.HasViolations || Violations.Count > 0 || DuplicateViolations.Count > 0;
 
     public void ShouldHaveNoViolations()
     {

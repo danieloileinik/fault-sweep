@@ -7,15 +7,21 @@ namespace FaultSweep.Verification;
 /// <summary>Read-only verification inputs after a delivery and its dependency injection scope have completed.</summary>
 public sealed class VerificationContext<TMessage>
 {
-    internal VerificationContext(TMessage message, IServiceProvider services,
-        IReadOnlyDictionary<string, StateSnapshot> state, FaultScenario? scenario,
-        IReadOnlyList<DeliveryAttempt> attempts)
+    internal VerificationContext(
+        TMessage message,
+        IServiceProvider services,
+        IReadOnlyDictionary<string, StateSnapshot> state,
+        FaultScenario? scenario,
+        IReadOnlyList<DeliveryAttempt> attempts,
+        DuplicateDeliveryMode? duplicates = null
+    )
     {
         Message = message;
         Services = services;
         State = state;
         Scenario = scenario;
         Attempts = attempts;
+        Duplicates = duplicates;
     }
 
     public TMessage Message { get; }
@@ -25,10 +31,12 @@ public sealed class VerificationContext<TMessage>
 
     public IReadOnlyDictionary<string, StateSnapshot> State { get; }
 
-    /// <summary>Null for the clean baseline.</summary>
+    /// <summary>The injected fault, or null for baseline and duplicate deliveries. Use IsBaseline to distinguish them.</summary>
     public FaultScenario? Scenario { get; }
 
-    public bool IsBaseline => Scenario is null;
+    public DuplicateDeliveryMode? Duplicates { get; }
+
+    public bool IsBaseline => Scenario is null && Duplicates is null;
 
     public IReadOnlyList<DeliveryAttempt> Attempts { get; }
 

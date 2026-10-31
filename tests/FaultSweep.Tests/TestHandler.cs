@@ -3,19 +3,20 @@ using FaultSweep.Effects;
 namespace FaultSweep.Tests;
 
 public sealed class TestHandler(TestState state, IEffectInterceptor effects, TestBehavior behavior)
-    : IMessageHandler<TestMessage>, IAsyncDisposable
+    : IMessageHandler<TestMessage>,
+        IAsyncDisposable
 {
-    private readonly int instance = ++state.HandlerInstances;
+    private readonly int instance = state.RegisterHandler();
 
     public ValueTask HandleAsync(TestMessage message, CancellationToken cancellationToken)
     {
-        state.DeliveryInstances.Add(instance);
+        state.RecordDelivery(instance);
         return behavior.Action(state, effects, cancellationToken);
     }
 
     public ValueTask DisposeAsync()
     {
-        state.DisposedHandlers++;
+        state.DisposeHandler();
         return ValueTask.CompletedTask;
     }
 }
