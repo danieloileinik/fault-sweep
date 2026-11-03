@@ -1,0 +1,13 @@
+**/bin
+**/obj
+.git
+.idea
+artifacts
+*.user
+.aws
+.codex
+.agents
+.env
+.env.*
+**/Tests
+tests
