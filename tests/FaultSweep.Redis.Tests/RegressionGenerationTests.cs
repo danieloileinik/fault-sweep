@@ -18,24 +18,42 @@ public sealed class RegressionGenerationTests(RedisFixture fixture)
         await using var host = new RedisTestHost(fixture.Connection, generate: true);
         var request = new RedisRequest(Guid.NewGuid().ToString("N") + ":");
         FaultSweepResult result = await host.CreateSweep(request).RunAsync();
-        string source = result.GenerateXunitRegressionTest(new XunitRegressionOptions
-        {
-            FixtureTypeName = "global::FaultSweep.Redis.Tests.RedisFixture",
-            CollectionName = RedisCollection.Name,
-            Namespace = "Generated"
-        });
+        string source = result.GenerateXunitRegressionTest(
+            new XunitRegressionOptions
+            {
+                FixtureTypeName = "global::FaultSweep.Redis.Tests.RedisFixture",
+                CollectionName = RedisCollection.Name,
+                Namespace = "Generated",
+            }
+        );
         Assert.Equal(source, result.MinimalScenario!.Result.RegressionTest);
-        IEnumerable<string> paths = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
-            .Concat(AppDomain.CurrentDomain.GetAssemblies().Where(assembly => !assembly.IsDynamic && !string.IsNullOrEmpty(assembly.Location)).Select(assembly => assembly.Location)).Distinct();
-        var compilation = CSharpCompilation.Create("Regression_" + Guid.NewGuid().ToString("N"),
-            [CSharpSyntaxTree.ParseText(source)], paths.Select(path => MetadataReference.CreateFromFile(path)),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        IEnumerable<string> paths = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Concat(
+                AppDomain
+                    .CurrentDomain.GetAssemblies()
+                    .Where(assembly =>
+                        !assembly.IsDynamic && !string.IsNullOrEmpty(assembly.Location)
+                    )
+                    .Select(assembly => assembly.Location)
+            )
+            .Distinct();
+        var compilation = CSharpCompilation.Create(
+            "Regression_" + Guid.NewGuid().ToString("N"),
+            [CSharpSyntaxTree.ParseText(source)],
+            paths.Select(path => MetadataReference.CreateFromFile(path)),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        );
         using var stream = new MemoryStream();
         EmitResult emitted = compilation.Emit(stream);
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
         stream.Position = 0;
         Assembly generated = AssemblyLoadContext.Default.LoadFromStream(stream);
-        Type type = generated.GetTypes().Single(candidate => candidate.IsPublic && candidate.GetMethod("ReproducesViolation") is not null);
+        Type type = generated
+            .GetTypes()
+            .Single(candidate =>
+                candidate.IsPublic && candidate.GetMethod("ReproducesViolation") is not null
+            );
         object test = Activator.CreateInstance(type, fixture)!;
         Task Invoke() => (Task)type.GetMethod("ReproducesViolation")!.Invoke(test, null)!;
 
@@ -46,11 +64,18 @@ public sealed class RegressionGenerationTests(RedisFixture fixture)
         {
             await Invoke();
         }
-        finally { fixture.RegressionFixed = false; }
+        finally
+        {
+            fixture.RegressionFixed = false;
+        }
 
         // Assert
         Assert.IsType<FaultSweepAssertionException>(broken);
-        Assert.All(result.Violations, violation => Assert.Contains("Xunit.Fact", violation.RegressionTest!));
-        Assert.Contains("Generated xUnit regression test:", result.ToString());
+        Assert.All(
+            result.Violations,
+            violation => Assert.Contains("Xunit.Fact", violation.RegressionTest!)
+        );
+        Assert.Contains("Generated xUnit regression test:", result.ToDetailedString());
+        Assert.DoesNotContain(source, result.ToString());
     }
 }

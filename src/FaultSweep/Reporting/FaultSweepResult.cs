@@ -54,9 +54,12 @@ public sealed class FaultSweepResult
     {
         if (HasViolations)
         {
-            throw new FaultSweepAssertionException(ToString());
+            throw new FaultSweepAssertionException(this);
         }
     }
 
     public override string ToString() => TextReport.Format(this);
+
+    /// <summary>Includes SQL targets, individual delivery traces, message payloads and generated regression tests.</summary>
+    public string ToDetailedString() => TextReport.Format(this, detailed: true);
 }
