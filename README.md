@@ -4,7 +4,56 @@ FaultSweep automates idempotency testing for .NET 10 services that process messa
 
 Instead of writing a separate test for every failure point, run your real handler through FaultSweep. It injects failures around database operations and message publication, redelivers the same message, and checks the final state. Use it in automated tests to catch duplicate writes, lost updates and incomplete recovery.
 
-## Test your handler
+## Check idempotency in an existing test
+
+Add `FaultSweep.Postgres` to the integration test project's package references. Use the existing application host and an isolated PostgreSQL database with migrations and seed data already applied:
+
+```csharp
+await FaultSweep.For<CreateOrderHandler>(factory.Services)
+    .WithPostgres(
+        postgres.GetConnectionString(),
+        ignore: ["outbox.created_at"])
+    .AssertIdempotentAsync(message);
+```
+
+Here `factory.Services` is the application's test service provider, `postgres` is the existing Testcontainers PostgreSQL container, and `message` is the request to deliver repeatedly. Import `FaultSweep.Postgres`. To use the short `FaultSweep.For` name, add `using FaultSweep = global::FaultSweep.FaultSweep;` inside the test namespace; alternatively use `global::FaultSweep.FaultSweep.For`.
+
+No `AddFaultSweep`, `ResetWith`, application changes or library-specific fixtures are required. The short API discovers tables in the `public` schema, saves the initial rows and sequence positions, and restores them before each scenario and after completion, failure or cancellation. It runs the standard fault scenarios plus sequential and parallel duplicate deliveries. Each delivery uses a fresh DI scope.
+
+`WithPostgres` accepts an optional `schema`. All tables in that schema must have primary keys and no row-level security. Foreign keys must remain within the selected schema; cycles require deferrable constraints. Restoration preserves generated and identity columns and suppresses application triggers while restoring seed data. Use a dedicated test database without background writes.
+
+`ignore` accepts a column name or `table.column` and affects comparison only, never the saved seed. Unknown columns are rejected. Explicitly ignore technical sequence-generated identifiers such as `outbox.id` when gaps after a transaction rollback are acceptable; business identifiers should remain checked.
+
+For ordinary handlers, the short API calls `HandleAsync(message[, cancellationToken])` returning `Task` or `ValueTask`, or `IMessageHandler<TMessage>.HandleAsync`. Handlers are resolved from DI or created with their registered dependencies. Use `CheckIdempotencyAsync(message)` instead of the assertion to inspect the full `FaultSweepResult`.
+
+## MediatR handlers
+
+`IRequestHandler<TRequest, TResponse>` and `IRequestHandler<TRequest>` are detected automatically. The same short API sends each delivery through **`ISender.Send`**, including the baseline, fault retries and duplicate deliveries. It also works with the detailed builder and scenario replay.
+
+FaultSweep resolves `ISender` from each delivery's scope and lets MediatR resolve the handler. This executes the application's registered pipeline behaviors: validation, transaction handling, `SaveChanges`, and any other behaviors surrounding the handler. Do not manually call `handler.Handle` in the sweep. The request response is awaited; verification checks the resulting state and invariants.
+
+The test host must contain the application's normal MediatR registrations and pipeline configuration. FaultSweep does not register MediatR or add transaction behaviors itself. A missing `ISender` fails the baseline instead of falling back to a direct handler call. No extra FaultSweep package or configuration is required, and FaultSweep does not impose a MediatR package version. Integration tests cover MediatR 12.5.0 and 14.1.0. Notifications and streaming handlers are not request sweeps.
+
+## Optional invariants
+
+The short API compares recovered state with a successful single delivery. Business invariants are optional and can be added in the same chain:
+
+```csharp
+await FaultSweep.For<CreateOrderHandler>(factory.Services)
+    .WithPostgres(postgres.GetConnectionString(), ignore: ["outbox.created_at"])
+    .CheckInvariant("exactly one order", context =>
+        context.State["postgres"].Value.GetProperty("orders").GetArrayLength() == 1)
+    .CheckInvariantAsync("one logical event", async (context, token) =>
+    {
+        var queries = context.Services.GetRequiredService<IOrderQueries>();
+        return await queries.CountEventsAsync(message.OrderId, token) == 1;
+    })
+    .AssertIdempotentAsync(message);
+```
+
+Invariants run after the baseline and each scenario. They can read snapshots or query through a separate DI scope. In the short API, capture the request from the test when a rule needs its fields. The detailed builder also provides typed `context.Message`.
+
+## Configure a detailed sweep
 
 Register your application handler and its dependencies in a test host. This example uses an isolated PostgreSQL database:
 
@@ -29,7 +78,7 @@ var result = await sweep.RunAsync();
 result.ShouldHaveNoViolations();
 ```
 
-Implement `IMessageHandler<TMessage>` or adapt your handler with `HandleWith`. The assertion works with xUnit, NUnit and other test runners.
+Implement `IMessageHandler<TMessage>`, use a MediatR request handler, or adapt another handler with `HandleWith`. An explicit `HandleWith` overrides automatic MediatR dispatch, so preserve `ISender.Send` when customizing a MediatR sweep. The assertion works with xUnit, NUnit and other test runners.
 
 `ResetAndSeedAsync(IServiceProvider services, CancellationToken token)` returns `ValueTask`. It must reset every relevant store and seed identical data before each scenario. Deliveries use fresh DI scopes, disposed before snapshots and retries. Kafka captures are reset between scenarios and retained across retries.
 
@@ -65,11 +114,11 @@ Each intercepted operation is an effect. For every recorded effect, FaultSweep t
 
 A simulated crash ends the delivery even if the handler catches the exception. Defaults are 20 effects per delivery and three redelivery attempts, stopping on success. Configure these through `FaultSweepOptions`.
 
-`WithDuplicateDeliveries()` adds two sequential and two concurrent deliveries. Concurrency exercises one schedule; use test barriers for reproducible races. Set options before `WithDuplicateDeliveries`, because `WithOptions` replaces all options.
+The short API includes two sequential and two concurrent deliveries by default. In the detailed builder, `WithDuplicateDeliveries()` enables them. Concurrency exercises one schedule; use test barriers for reproducible races. `WithOptions` replaces all options, including the duplicate-delivery modes; in the detailed builder set options before `WithDuplicateDeliveries`.
 
 ## Adapters
 
-Add the adapters your service needs alongside the core `FaultSweep` package:
+`WithPostgres` enables the short API without DI changes. For detailed sweeps and other stores, add the adapters your service needs alongside the core `FaultSweep` package:
 
 | Package | Register | Track state |
 | --- | --- | --- |
@@ -106,6 +155,12 @@ dotnet restore FaultSweep.slnx
 dotnet build FaultSweep.slnx -c Release --no-restore -m:1
 dotnet test FaultSweep.slnx -c Release --no-build --no-restore -m:1
 dotnet pack FaultSweep.slnx -c Release --no-build --no-restore -o artifacts/packages
+```
+
+To check the MediatR pipeline tests with an alternative installed version:
+
+```sh
+dotnet test tests/FaultSweep.Postgres.Tests/FaultSweep.Postgres.Tests.csproj -p:MediatRTestVersion=14.1.0 --filter FullyQualifiedName~MediatRSweepTests
 ```
 
 Integration tests require Docker and share containers through collection fixtures, with isolated data per test. CI builds and tests the solution and produces packages. Publishing requires `NUGET_API_KEY` and a tag matching the package version; see the [release workflow](.github/workflows/ci.yml).
