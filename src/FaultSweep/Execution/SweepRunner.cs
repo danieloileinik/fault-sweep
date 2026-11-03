@@ -8,25 +8,23 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace FaultSweep.Execution;
 
-internal sealed partial class SweepRunner<THandler, TMessage>(
+internal sealed partial class SweepRunner<TMessage>(
     IServiceProvider services,
     EffectInterceptor interceptor,
     TMessage message,
-    Func<THandler, TMessage, CancellationToken, ValueTask>? handle,
-    Func<IServiceProvider, CancellationToken, ValueTask> reset,
-    IReadOnlyList<SnapshotRegistration> snapshots,
-    IReadOnlyList<InvariantRegistration<TMessage>> invariants,
-    IReadOnlyDictionary<string, Func<TMessage, StateSnapshot>> expectedStates,
-    FaultSweepOptions options,
-    ReplayScenario? replay = null,
-    MessageMinimizer<TMessage>? minimizer = null,
-    DuplicateDeliveryMode? duplicateReplay = null,
-    bool createHandler = false,
-    IReadOnlyCollection<IEffectInstrumentation>? additionalInstrumentation = null,
-    Func<IServiceProvider, TMessage, CancellationToken, ValueTask>? dispatch = null
+    SweepPlan<TMessage> plan
 )
-    where THandler : class
 {
+    private readonly Func<IServiceProvider, CancellationToken, ValueTask> reset = plan.Reset;
+    private readonly IReadOnlyList<SnapshotRegistration> snapshots = plan.Snapshots;
+    private readonly IReadOnlyList<InvariantRegistration<TMessage>> invariants = plan.Invariants;
+    private readonly IReadOnlyDictionary<string, Func<TMessage, StateSnapshot>> expectedStates =
+        plan.ExpectedStates;
+    private readonly FaultSweepOptions options = plan.Options;
+    private readonly ReplayScenario? replay = plan.Replay;
+    private readonly MessageMinimizer<TMessage>? minimizer = plan.Minimizer;
+    private readonly DuplicateDeliveryMode? duplicateReplay = plan.DuplicateReplay;
+
     public async Task<FaultSweepResult> RunAsync(
         CancellationToken cancellationToken,
         Func<ValueTask>? cleanup = null
@@ -36,9 +34,7 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
         try
         {
             using var instrumentation = new EffectInstrumentationScope(
-                services
-                    .GetServices<IEffectInstrumentation>()
-                    .Concat(additionalInstrumentation ?? []),
+                services.GetServices<IEffectInstrumentation>().Concat(plan.Instrumentation ?? []),
                 interceptor
             );
             FaultSweepResult result = (
@@ -368,7 +364,7 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
             await interceptor
                 .RunAsync(
                     session,
-                    () => InvokeAsync(scope.ServiceProvider, runMessage, cancellationToken)
+                    () => plan.Invoke(scope.ServiceProvider, runMessage, cancellationToken)
                 )
                 .ConfigureAwait(false);
         }
@@ -388,44 +384,6 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
 
         error = session.Crash ?? error;
         return new DeliveryAttempt(attempt, error is null, error);
-    }
-
-    private async ValueTask InvokeAsync(
-        IServiceProvider provider,
-        TMessage runMessage,
-        CancellationToken token
-    )
-    {
-        if (dispatch is not null)
-        {
-            await dispatch(provider, runMessage, token).ConfigureAwait(false);
-            return;
-        }
-
-        THandler? handler = provider.GetService<THandler>();
-        if (handler is not null || !createHandler)
-        {
-            await handle!(handler ?? provider.GetRequiredService<THandler>(), runMessage, token)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        handler = ActivatorUtilities.CreateInstance<THandler>(provider);
-        try
-        {
-            await handle!(handler, runMessage, token).ConfigureAwait(false);
-        }
-        finally
-        {
-            if (handler is IAsyncDisposable asynchronous)
-            {
-                await asynchronous.DisposeAsync().ConfigureAwait(false);
-            }
-            else if (handler is IDisposable disposable)
-            {
-                disposable.Dispose();
-            }
-        }
     }
 
     private static FaultScenarioResult? Smallest(FaultSweepResult result) =>

@@ -24,10 +24,15 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
     private MessageMinimizer<TMessage>? minimizer;
     private FaultSweepOptions options = new();
 
-    internal FaultSweepBuilder(IServiceProvider services, TMessage message)
+    internal FaultSweepBuilder(
+        IServiceProvider services,
+        TMessage message,
+        FaultSweepOptions? options = null
+    )
     {
         this.services = services;
         this.message = message;
+        this.options = options ?? new FaultSweepOptions();
     }
 
     /// <summary>Resets every tracked store and seeds the same initial data before each scenario.</summary>
@@ -217,49 +222,17 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
             );
         }
 
-        if (snapshots.Count == 0 && (options.CompareWithBaseline || invariants.Count == 0))
-        {
-            throw new InvalidOperationException(
-                "Track at least one state snapshot before running a sweep."
-            );
-        }
-
-        if (!options.CompareWithBaseline && expectedStates.Count == 0 && invariants.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Configure expected state or an invariant when baseline comparison is disabled."
-            );
-        }
-
-        foreach (
-            var name in expectedStates.Keys.Where(name =>
-                !snapshots.Any(snapshot =>
-                    string.Equals(snapshot.Name, name, StringComparison.Ordinal)
-                )
-            )
-        )
-        {
-            throw new InvalidOperationException(
-                $"Expected state '{name}' requires a tracked snapshot with the same name."
-            );
-        }
-
-        Func<IServiceProvider, TMessage, CancellationToken, ValueTask>? dispatch = handle is null
-            ? MediatRInvocation<THandler, TMessage>.Create()
-            : null;
-        Func<THandler, TMessage, CancellationToken, ValueTask> invoke =
-            handle ?? InvokeHandlerAsync;
-        if (
-            handle is null
-            && dispatch is null
-            && !typeof(IMessageHandler<TMessage>).IsAssignableFrom(typeof(THandler))
-        )
-        {
-            throw new InvalidOperationException(
-                "Implement IMessageHandler<TMessage> or a MediatR IRequestHandler, or configure HandleWith."
-            );
-        }
-
+        var plan = new SweepPlan<TMessage>(
+            SweepInvocation<THandler, TMessage>.Create(handle),
+            reset,
+            snapshots,
+            invariants,
+            expectedStates,
+            options,
+            replay,
+            minimizer,
+            duplicateReplay
+        ).ValidateAndCopy();
         foreach (Action<IServiceProvider> validation in validations)
         {
             validation(services);
@@ -270,24 +243,7 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
             ?? throw new InvalidOperationException(
                 "Register FaultSweep with services.AddFaultSweep()."
             );
-        var runner = new SweepRunner<THandler, TMessage>(
-            services,
-            interceptor,
-            message,
-            invoke,
-            reset,
-            [.. snapshots],
-            [.. invariants],
-            new Dictionary<string, Func<TMessage, StateSnapshot>>(
-                expectedStates,
-                StringComparer.Ordinal
-            ),
-            options.ValidateAndCopy(),
-            replay,
-            minimizer,
-            duplicateReplay,
-            dispatch: dispatch
-        );
+        var runner = new SweepRunner<TMessage>(services, interceptor, message, plan);
         return runner.RunAsync(cancellationToken);
     }
 
@@ -305,14 +261,5 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
 
         snapshots.Add(new SnapshotRegistration(name, capture, new SnapshotComparer(comparison)));
         return this;
-    }
-
-    private static ValueTask InvokeHandlerAsync(
-        THandler handler,
-        TMessage value,
-        CancellationToken token
-    )
-    {
-        return ((IMessageHandler<TMessage>)handler).HandleAsync(value, token);
     }
 }

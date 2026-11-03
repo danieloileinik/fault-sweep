@@ -16,10 +16,7 @@ public sealed class FaultSweepBuilder<THandler>
         Func<VerificationContext, CancellationToken, ValueTask<bool>> Check,
         string Failure
     )> invariants = [];
-    private FaultSweepOptions options = new()
-    {
-        DuplicateDeliveries = [DuplicateDeliveryMode.Sequential, DuplicateDeliveryMode.Parallel],
-    };
+    private FaultSweepOptions? options;
 
     internal FaultSweepBuilder(IServiceProvider services)
     {
@@ -37,7 +34,7 @@ public sealed class FaultSweepBuilder<THandler>
             );
         }
 
-        return new FaultSweepBuilder<THandler, TMessage>(services, message);
+        return new FaultSweepBuilder<THandler, TMessage>(services, message, options);
     }
 
     /// <summary>Configures an automatically restored store without changing application registrations.</summary>
@@ -45,6 +42,13 @@ public sealed class FaultSweepBuilder<THandler>
         string name,
         IEffectInstrumentation instrumentation,
         Func<CancellationToken, ValueTask<ISweepEnvironment>> create
+    ) => WithEnvironment(name, instrumentation, create, null);
+
+    public FaultSweepBuilder<THandler> WithEnvironment(
+        string name,
+        IEffectInstrumentation instrumentation,
+        Func<CancellationToken, ValueTask<ISweepEnvironment>> create,
+        SnapshotComparisonOptions? comparison
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -58,7 +62,14 @@ public sealed class FaultSweepBuilder<THandler>
             );
         }
 
-        environments.Add(new EnvironmentRegistration(name, instrumentation, create));
+        environments.Add(
+            new EnvironmentRegistration(
+                name,
+                instrumentation,
+                new SnapshotComparer(comparison),
+                create
+            )
+        );
         return this;
     }
 
@@ -124,26 +135,11 @@ public sealed class FaultSweepBuilder<THandler>
             );
         }
 
-        if (!options.CompareWithBaseline && invariants.Count == 0)
-        {
-            throw new InvalidOperationException(
-                "Configure an invariant when baseline comparison is disabled."
-            );
-        }
-
-        Func<IServiceProvider, TMessage, CancellationToken, ValueTask>? dispatch =
-            MediatRInvocation<THandler, TMessage>.Create();
-        Func<THandler, TMessage, CancellationToken, ValueTask>? invoke = dispatch is null
-            ? HandlerInvocation<THandler, TMessage>.Create()
-            : null;
         EnvironmentRegistration[] registrations = [.. environments];
         List<ISweepEnvironment> prepared = [];
         EffectInterceptor interceptor = SweepInterceptors.For(services);
-        var runner = new SweepRunner<THandler, TMessage>(
-            services,
-            interceptor,
-            message,
-            invoke,
+        var plan = new SweepPlan<TMessage>(
+            SweepInvocation<THandler, TMessage>.Create(createHandler: true),
             async (_, token) =>
             {
                 if (prepared.Count == 0)
@@ -168,7 +164,7 @@ public sealed class FaultSweepBuilder<THandler>
                         new SnapshotRegistration(
                             registration.Name,
                             (_, token) => prepared[index].CaptureAsync(token),
-                            new SnapshotComparer(null)
+                            registration.Comparer
                         )
                 )
                 .ToArray(),
@@ -180,13 +176,20 @@ public sealed class FaultSweepBuilder<THandler>
                 ))
                 .ToArray(),
             new Dictionary<string, Func<TMessage, StateSnapshot>>(StringComparer.Ordinal),
-            options.ValidateAndCopy(),
-            createHandler: true,
-            additionalInstrumentation: registrations
+            options
+                ?? new FaultSweepOptions
+                {
+                    DuplicateDeliveries =
+                    [
+                        DuplicateDeliveryMode.Sequential,
+                        DuplicateDeliveryMode.Parallel,
+                    ],
+                },
+            Instrumentation: registrations
                 .Select(registration => registration.Instrumentation)
-                .ToArray(),
-            dispatch: dispatch
-        );
+                .ToArray()
+        ).ValidateAndCopy();
+        var runner = new SweepRunner<TMessage>(services, interceptor, message, plan);
 
         return runner.RunAsync(
             cancellationToken,

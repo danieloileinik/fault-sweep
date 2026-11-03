@@ -5,8 +5,7 @@ using FaultSweep.Verification;
 
 namespace FaultSweep.Execution;
 
-internal sealed partial class SweepRunner<THandler, TMessage>
-    where THandler : class
+internal sealed partial class SweepRunner<TMessage>
 {
     private async Task<DuplicateScenarioResult> RunDuplicatesAsync(
         DuplicateDeliveryMode mode,
