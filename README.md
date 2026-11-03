@@ -4,7 +4,7 @@ FaultSweep automates idempotency testing for .NET services that interact with ot
 
 Instead of writing a separate test for every failure point, run your real handler through FaultSweep. It injects failures around database operations and message publication, redelivers the same message, and checks the final state. Use it in automated tests to catch duplicate writes, lost updates and incomplete recovery.
 
-## Check idempotency in an existing test
+## Check idempotency in integration tests
 
 Add `FaultSweep.Postgres` to the integration test project's package references. Use the existing application host and an isolated PostgreSQL database with migrations and seed data already applied:
 
@@ -18,13 +18,6 @@ await FaultSweep.For<CreateOrderHandler>(factory.Services)
 
 Here `factory.Services` is the application's test service provider, `postgres` is the existing Testcontainers PostgreSQL container, and `message` is the request to deliver repeatedly. Import `FaultSweep.Postgres`. To use the short `FaultSweep.For` name, add `using FaultSweep = global::FaultSweep.FaultSweep;` inside the test namespace; alternatively use `global::FaultSweep.FaultSweep.For`.
 
-No `AddFaultSweep`, `ResetWith`, application changes or library-specific fixtures are required. The short API discovers tables in the `public` schema, saves the initial rows and sequence positions, and restores them before each scenario and after completion, failure or cancellation. It runs the standard fault scenarios plus sequential and parallel duplicate deliveries. Each delivery uses a fresh DI scope.
-
-`WithPostgres` accepts an optional `schema`. All tables in that schema must have primary keys and no row-level security. Foreign keys must remain within the selected schema; cycles require deferrable constraints. Restoration preserves generated and identity columns and suppresses application triggers while restoring seed data. Use a dedicated test database without background writes.
-
-`ignore` accepts a column name or `table.column` and affects comparison only, never the saved seed. Unknown columns are rejected. Explicitly ignore technical sequence-generated identifiers such as `outbox.id` when gaps after a transaction rollback are acceptable; business identifiers should remain checked.
-
-For ordinary handlers, the short API calls `HandleAsync(message[, cancellationToken])` returning `Task` or `ValueTask`, or `IMessageHandler<TMessage>.HandleAsync`. Handlers are resolved from DI or created with their registered dependencies. Use `CheckIdempotencyAsync(message)` instead of the assertion to inspect the full `FaultSweepResult`.
 
 ## MediatR handlers
 
