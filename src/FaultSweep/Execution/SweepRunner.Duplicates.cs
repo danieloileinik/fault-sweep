@@ -87,7 +87,8 @@ internal sealed partial class SweepRunner<TMessage>
             .ToArray();
         IReadOnlyDictionary<string, StateSnapshot> state = await CaptureAsync(token)
             .ConfigureAwait(false);
-        VerificationResult verification = await VerifyAsync(
+        VerificationResult verification = await verifier
+            .VerifyAsync(
                 runMessage,
                 state,
                 expected,

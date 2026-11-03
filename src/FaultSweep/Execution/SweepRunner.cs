@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Text.Json;
 using FaultSweep.Effects;
 using FaultSweep.Reporting;
 using FaultSweep.Snapshots;
@@ -17,12 +16,20 @@ internal sealed partial class SweepRunner<TMessage>(
 {
     private readonly Func<IServiceProvider, CancellationToken, ValueTask> reset = plan.Reset;
     private readonly IReadOnlyList<SnapshotRegistration> snapshots = plan.Snapshots;
-    private readonly IReadOnlyList<InvariantRegistration<TMessage>> invariants = plan.Invariants;
     private readonly IReadOnlyDictionary<string, Func<TMessage, StateSnapshot>> expectedStates =
         plan.ExpectedStates;
     private readonly FaultSweepOptions options = plan.Options;
     private readonly ReplayScenario? replay = plan.Replay;
-    private readonly MessageMinimizer<TMessage>? minimizer = plan.Minimizer;
+    private readonly SweepVerifier<TMessage> verifier = new(
+        services,
+        plan.Snapshots,
+        plan.Invariants,
+        plan.Options.CompareWithBaseline
+    );
+    private readonly SweepMinimizer<TMessage> minimizer = new(
+        plan.Minimizer,
+        plan.Options.MaxMinimizationRuns
+    );
     private readonly DuplicateDeliveryMode? duplicateReplay = plan.DuplicateReplay;
 
     public async Task<FaultSweepResult> RunAsync(
@@ -42,8 +49,18 @@ internal sealed partial class SweepRunner<TMessage>(
                 FaultSweepResult result = (
                     await RunOnceAsync(message, false, cancellationToken).ConfigureAwait(false)
                 )!;
-                await MinimizeAsync(result, cancellationToken).ConfigureAwait(false);
-                AttachRegressionTests(result, message);
+                SweepMinimum<TMessage>? minimum = await minimizer
+                    .MinimizeAsync(
+                        result,
+                        message,
+                        (candidate, token) => RunOnceAsync(candidate, true, token),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                var regressionTests = new RegressionTestPreparer<TMessage>(
+                    services.GetService<IRegressionTestGenerator>()
+                );
+                regressionTests.Attach(result, message, minimum);
                 return result;
             }
             catch (Exception exception)
@@ -126,7 +143,8 @@ internal sealed partial class SweepRunner<TMessage>(
                 cancellationToken
             )
             .ConfigureAwait(false);
-        VerificationResult baselineVerification = await VerifyAsync(
+        VerificationResult baselineVerification = await verifier
+            .VerifyAsync(
                 runMessage,
                 baselineState,
                 expected,
@@ -250,7 +268,8 @@ internal sealed partial class SweepRunner<TMessage>(
 
         IReadOnlyDictionary<string, StateSnapshot> state = await CaptureAsync(cancellationToken)
             .ConfigureAwait(false);
-        VerificationResult verification = await VerifyAsync(
+        VerificationResult verification = await verifier
+            .VerifyAsync(
                 runMessage,
                 state,
                 expected,
@@ -283,81 +302,6 @@ internal sealed partial class SweepRunner<TMessage>(
         }
 
         return new FaultScenarioResult(scenario, violations, attempts, trace, state, verification);
-    }
-
-    private async ValueTask<VerificationResult> VerifyAsync(
-        TMessage runMessage,
-        IReadOnlyDictionary<string, StateSnapshot> state,
-        IReadOnlyDictionary<string, StateSnapshot> expected,
-        IReadOnlyDictionary<string, StateSnapshot>? baselineState,
-        FaultScenario? scenario,
-        IReadOnlyList<DeliveryAttempt> attempts,
-        CancellationToken cancellationToken,
-        DuplicateDeliveryMode? duplicates = null
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        List<SnapshotDifference> differences = [];
-        foreach (
-            SnapshotRegistration snapshot in snapshots.OrderBy(
-                snapshot => snapshot.Name,
-                StringComparer.Ordinal
-            )
-        )
-        {
-            StateSnapshot? reference =
-                expected.GetValueOrDefault(snapshot.Name)
-                ?? (
-                    options.CompareWithBaseline
-                        ? baselineState?.GetValueOrDefault(snapshot.Name)
-                        : null
-                );
-            if (reference is not null)
-            {
-                differences.AddRange(
-                    snapshot.Comparer.Compare(snapshot.Name, reference, state[snapshot.Name])
-                );
-            }
-        }
-
-        List<InvariantViolation> failures = [];
-        if (invariants.Count > 0)
-        {
-            await using AsyncServiceScope scope = services.CreateAsyncScope();
-            var context = new VerificationContext<TMessage>(
-                runMessage,
-                scope.ServiceProvider,
-                state,
-                scenario,
-                attempts,
-                duplicates
-            );
-            foreach (InvariantRegistration<TMessage> invariant in invariants)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    if (!await invariant.Check(context, cancellationToken).ConfigureAwait(false))
-                    {
-                        failures.Add(
-                            new InvariantViolation(invariant.Name, invariant.FailureMessage)
-                        );
-                    }
-                }
-                catch (Exception exception)
-                    when (exception is not OperationCanceledException
-                        || !cancellationToken.IsCancellationRequested
-                    )
-                {
-                    failures.Add(
-                        new InvariantViolation(invariant.Name, exception.Message, exception)
-                    );
-                }
-            }
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        return new VerificationResult(differences, failures);
     }
 
     private async ValueTask<DeliveryAttempt> DeliverAsync(
@@ -396,184 +340,6 @@ internal sealed partial class SweepRunner<TMessage>(
 
         error = session.Crash ?? error;
         return new DeliveryAttempt(attempt, error is null, error);
-    }
-
-    private static FaultScenarioResult? Smallest(FaultSweepResult result) =>
-        result
-            .Violations.OrderBy(item => item.Scenario.Point.Index)
-            .ThenBy(item => item.Attempts.Count)
-            .ThenBy(item => item.Scenario.Kind)
-            .FirstOrDefault();
-
-    private async Task MinimizeAsync(FaultSweepResult original, CancellationToken token)
-    {
-        // A fault scenario is meaningful only when the original and shrunken clean runs satisfy the business rules.
-        if (original.BaselineVerification.HasViolations)
-        {
-            return;
-        }
-
-        FaultScenarioResult? smallest = Smallest(original);
-        DuplicateScenarioResult? smallestDuplicate = original.DuplicateViolations.FirstOrDefault();
-        if (smallest is null && smallestDuplicate is null)
-        {
-            return;
-        }
-
-        TMessage bestMessage = message;
-        int evaluated = 0;
-        bool exhausted = false;
-        if (minimizer is not null)
-        {
-            long score = minimizer.Complexity(bestMessage);
-            ArgumentOutOfRangeException.ThrowIfNegative(score);
-            while (evaluated < options.MaxMinimizationRuns)
-            {
-                bool improved = false;
-                // Only a strictly smaller candidate may replace the current message; cycles cannot keep the search alive.
-                foreach (TMessage candidate in minimizer.Shrink(bestMessage))
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (evaluated >= options.MaxMinimizationRuns)
-                    {
-                        exhausted = true;
-                        break;
-                    }
-                    evaluated++;
-                    long candidateScore = minimizer.Complexity(candidate);
-                    if (candidateScore < 0 || candidateScore >= score)
-                    {
-                        continue;
-                    }
-
-                    FaultSweepResult? candidateResult = await RunOnceAsync(candidate, true, token)
-                        .ConfigureAwait(false);
-                    FaultScenarioResult? candidateViolation = candidateResult is null
-                        ? null
-                        : Smallest(candidateResult);
-                    DuplicateScenarioResult? candidateDuplicate =
-                        candidateResult?.DuplicateViolations.FirstOrDefault();
-                    if (candidateViolation is null && candidateDuplicate is null)
-                    {
-                        continue;
-                    }
-
-                    bestMessage = candidate;
-                    score = candidateScore;
-                    smallest = candidateViolation;
-                    smallestDuplicate = candidateDuplicate;
-                    improved = true;
-                }
-                if (!improved)
-                {
-                    break;
-                }
-            }
-            exhausted |= evaluated >= options.MaxMinimizationRuns;
-        }
-        if (smallest is not null)
-        {
-            original.MinimalScenario = new MinimizedScenario(
-                smallest,
-                SerializeMessage(bestMessage),
-                CSharpTypeName.Format(typeof(TMessage)),
-                evaluated,
-                exhausted
-            );
-        }
-        if (smallestDuplicate is not null)
-        {
-            original.MinimalDuplicateScenario = new MinimizedDuplicateScenario(
-                smallestDuplicate,
-                SerializeMessage(bestMessage),
-                CSharpTypeName.Format(typeof(TMessage)),
-                evaluated,
-                exhausted
-            );
-        }
-        IRegressionTestGenerator? generator = services.GetService<IRegressionTestGenerator>();
-        if (generator is not null && smallest is not null)
-        {
-            smallest.RegressionTest = generator.Generate(CreateCase(bestMessage, smallest));
-        }
-        if (generator is not null && smallestDuplicate is not null)
-        {
-            smallestDuplicate.RegressionTest = generator.Generate(
-                new RegressionTestCase(
-                    SerializeMessage(bestMessage),
-                    CSharpTypeName.Format(typeof(TMessage)),
-                    null,
-                    smallestDuplicate.Mode
-                )
-            );
-        }
-    }
-
-    private void AttachRegressionTests(FaultSweepResult result, TMessage runMessage)
-    {
-        if (result.BaselineVerification.HasViolations)
-        {
-            result.BaselineRegressionCase = new RegressionTestCase(
-                SerializeMessage(runMessage),
-                CSharpTypeName.Format(typeof(TMessage)),
-                null
-            );
-        }
-
-        IRegressionTestGenerator? generator = services.GetService<IRegressionTestGenerator>();
-        if (generator is null)
-        {
-            return;
-        }
-
-        if (result.BaselineRegressionCase is { } baselineCase)
-        {
-            result.BaselineRegressionTest = generator.Generate(baselineCase);
-        }
-
-        foreach (FaultScenarioResult violation in result.Violations)
-        {
-            violation.RegressionTest ??= generator.Generate(CreateCase(runMessage, violation));
-        }
-        foreach (DuplicateScenarioResult violation in result.DuplicateViolations)
-        {
-            violation.RegressionTest ??= generator.Generate(
-                new RegressionTestCase(
-                    SerializeMessage(runMessage),
-                    CSharpTypeName.Format(typeof(TMessage)),
-                    null,
-                    violation.Mode
-                )
-            );
-        }
-    }
-
-    private RegressionTestCase CreateCase(TMessage runMessage, FaultScenarioResult violation) =>
-        new(
-            SerializeMessage(runMessage),
-            CSharpTypeName.Format(typeof(TMessage)),
-            new ReplayScenario(
-                violation.Scenario.Point.Index,
-                violation.Scenario.Kind,
-                violation.Attempts.Count > 1 ? violation.Attempts.Count - 1 : 1,
-                violation.Scenario.Point.Effect
-            )
-        );
-
-    private static string? SerializeMessage(TMessage value)
-    {
-        try
-        {
-            return JsonSerializer.Serialize(value);
-        }
-        catch (NotSupportedException)
-        {
-            return null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
     }
 
     private async ValueTask ResetAsync(CancellationToken cancellationToken)
