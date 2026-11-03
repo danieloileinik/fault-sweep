@@ -1,4 +1,7 @@
 # FaultSweep
+[![CI](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/FaultSweep.svg)](https://www.nuget.org/packages/FaultSweep)
+[![License: MIT](https://img.shields.io/github/license/danieloileinik/fault-sweep.svg)](LICENSE)
 
 FaultSweep automates idempotency testing for .NET services that interact with other services. It checks that failures, retries and duplicate deliveries do not repeat business effects, such as charging a payment twice.
 
