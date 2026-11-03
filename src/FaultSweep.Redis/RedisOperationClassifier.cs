@@ -1,6 +1,9 @@
+using FaultSweep.Effects;
+using StackExchange.Redis;
+
 namespace FaultSweep.Redis;
 
-internal static class RedisWriteClassifier
+internal static class RedisOperationClassifier
 {
     // csharpier-ignore-start -- Keep consecutive fields together.
     private static readonly HashSet<string> Reads = new(StringComparer.Ordinal)
@@ -137,15 +140,76 @@ internal static class RedisWriteClassifier
         return name != "StreamReadGroup" && Reads.Contains(name);
     }
 
-    public static bool RawCommandWrites(string command)
+    public static RedisOperation Classify(string method, object?[] arguments)
     {
-        if (!RawReads.Contains(command) && !RawWrites.Contains(command))
+        string name = method.EndsWith("Async", StringComparison.Ordinal) ? method[..^5] : method;
+        if (
+            name is "CreateTransaction" or "CreateBatch"
+            || arguments[0]?.GetType().Name is "RedisTransaction" or "RedisBatch"
+        )
         {
-            RedisInstrumentation.Current.Value!.ReportInstrumentationFailure(
-                $"The raw Redis command '{command}' cannot be safely instrumented. Use a supported key command."
+            return new RedisOperation(
+                Rejection: "Redis transactions and queued batches are not supported by fault injection."
             );
         }
 
-        return RawWrites.Contains(command);
+        if (IsRead(method))
+        {
+            return new RedisOperation();
+        }
+
+        if (
+            name == "Publish"
+            || name.StartsWith("Array", StringComparison.Ordinal)
+            || name.StartsWith("VectorSet", StringComparison.Ordinal)
+            || name
+                is "StreamReadGroup"
+                    or "StreamAcknowledge"
+                    or "StreamAcknowledgeAndDelete"
+                    or "StreamAutoClaim"
+                    or "StreamAutoClaimIdsOnly"
+                    or "StreamClaim"
+                    or "StreamClaimIdsOnly"
+                    or "StreamCreateConsumerGroup"
+                    or "StreamDeleteConsumerGroup"
+                    or "StreamDeleteConsumer"
+                    or "StreamConsumerGroupSetPosition"
+                    or "StreamNegativeAcknowledge"
+        )
+        {
+            return new RedisOperation(
+                Rejection: "This Redis operation has state outside the supported key snapshot types."
+            );
+        }
+
+        if (
+            arguments.OfType<CommandFlags>().Any(flags => flags.HasFlag(CommandFlags.FireAndForget))
+        )
+        {
+            return new RedisOperation(
+                Rejection: "Redis FireAndForget cannot confirm whether an effect was applied."
+            );
+        }
+
+        if (name is "Execute" or "ExecuteResp")
+        {
+            string command = arguments[1]?.ToString() ?? "";
+            if (!RawReads.Contains(command) && !RawWrites.Contains(command))
+            {
+                return new RedisOperation(
+                    Rejection: $"The raw Redis command '{command}' cannot be safely instrumented. Use a supported key command."
+                );
+            }
+
+            if (!RawWrites.Contains(command))
+            {
+                return new RedisOperation();
+            }
+        }
+
+        string target =
+            arguments.Skip(1).OfType<RedisKey>().Select(key => key.ToString()).FirstOrDefault()
+            ?? "";
+        return new RedisOperation(new EffectDescriptor("redis", name, target));
     }
 }
