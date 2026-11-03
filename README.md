@@ -1,6 +1,6 @@
 # FaultSweep
 
-FaultSweep automates idempotency testing for .NET 10 services that process messages. It checks that failures, retries and duplicate deliveries do not repeat business effects, such as charging a payment twice.
+FaultSweep automates idempotency testing for .NET 10 services that interact with other services. It checks that failures, retries and duplicate deliveries do not repeat business effects, such as charging a payment twice.
 
 Instead of writing a separate test for every failure point, run your real handler through FaultSweep. It injects failures around database operations and message publication, redelivers the same message, and checks the final state. Use it in automated tests to catch duplicate writes, lost updates and incomplete recovery.
 
@@ -104,17 +104,42 @@ For a payment, verify the balance, debit count and logical event. Use `TrackProd
 
 ## Scenarios
 
-Each intercepted operation is an effect. For every recorded effect, FaultSweep tests:
+Scenarios are derived deterministically from a clean baseline execution of the supplied request:
 
-| Fault | Behavior |
+1. Restore the initial data and execute the request once without injected faults. Record the ordered sequence of intercepted operations and the resulting state.
+2. Number those operations starting at 1. Each occurrence is a separate **effect**, even when the same SQL is executed more than once. PostgreSQL commands, including reads, are effects; an explicit transaction commit is another effect. An Npgsql batch is one effect. Setup, state restoration, snapshot queries and invariant queries are outside the delivery and are not counted.
+3. Create one independent scenario for every pair of **effect index × enabled fault kind**. Restore the initial data before each scenario, then inject exactly one fault at the selected effect during the first delivery.
+4. Retry the same request after a failed delivery, using a fresh DI scope and no further injected faults. Keep the partially modified state between attempts. Stop on success or when the redelivery limit is reached, then compare the state and check invariants.
+5. Run each enabled duplicate-delivery mode as another independent scenario, starting from the initial data again. These scenarios do not inject faults: they test two deliveries of the same request, either sequentially or concurrently. Each failed delivery can also be retried.
+
+The three default fault kinds are:
+
+| Fault | Behavior at the selected effect |
 | --- | --- |
-| `CrashBefore` | Stop before the operation. |
-| `CrashAfter` | Apply the operation, then stop. |
-| `AppliedButFailed` | Apply the operation, then return a recoverable timeout. |
+| `CrashBefore` | Throw `SimulatedCrashException` before calling the underlying operation. |
+| `CrashAfter` | Await the underlying operation, then throw `SimulatedCrashException` before returning to its caller. |
+| `AppliedButFailed` | Await the underlying operation, then throw a recoverable `AppliedButFailedException` derived from `TimeoutException`. |
 
-A simulated crash ends the delivery even if the handler catches the exception. Defaults are 20 effects per delivery and three redelivery attempts, stopping on success. Configure these through `FaultSweepOptions`.
+These are interruptions at operation boundaries, not process termination. `finally` blocks and scope disposal still run. A recorded crash makes the delivery fail even if application code catches the exception; subsequent intercepted operations in that delivery are blocked. An `UPDATE` completed inside an uncommitted transaction can still roll back during disposal; a completed `COMMIT` has already persisted the changes.
 
-The short API includes two sequential and two concurrent deliveries by default. In the detailed builder, `WithDuplicateDeliveries()` enables them. Concurrency exercises one schedule; use test barriers for reproducible races. `WithOptions` replaces all options, including the duplicate-delivery modes; in the detailed builder set options before `WithDuplicateDeliveries`.
+The scenario count for a normal sweep is:
+
+```text
+N = number of effects recorded in the clean baseline
+K = number of enabled distinct fault kinds (default: 3)
+D = number of enabled distinct duplicate modes (0, 1 or 2)
+
+fault scenarios = N × K
+all scenarios   = N × K + D
+```
+
+The short API enables both duplicate modes by default, so **8 effects produce 8 × 3 + 2 = 26 scenarios**: 24 fault scenarios, one sequential-duplicate scenario and one parallel-duplicate scenario. The detailed builder defaults to no duplicate modes, so the same trace produces 24 scenarios until `WithDuplicateDeliveries()` is enabled.
+
+The clean baseline is an additional execution and is **not** included in the scenario count. A delivery attempt is not a new scenario either. With the default `MaxRedeliveryAttempts = 3`, a fault scenario can make up to four attempts: the initial delivery plus three retries. A duplicate scenario has two initial deliveries and can make up to eight attempts if both need all retries. Thus `Attempts: 5; succeeded: 1; failed: 4` means one delivery succeeded and the other exhausted its four attempts.
+
+`FaultSweepOptions.FaultKinds` selects the fault kinds; `DuplicateDeliveries` selects the duplicate modes. `WithOptions` replaces all options, including duplicate modes. For the detailed builder, call `WithDuplicateDeliveries()` after `WithOptions` if both modes are wanted. `MaxEffects` defaults to 20 per delivery and is a guard: exceeding it fails the sweep instead of truncating the trace or sampling effects.
+
+FaultSweep explores the effect boundaries observed in the baseline, with one injected fault per scenario. It does not enumerate combinations of faults or every possible concurrent schedule. `ReplayScenario` selects one fault scenario; `ReplayDuplicates` selects one duplicate mode. Both still execute a baseline, and neither runs the remaining scenarios. Message minimization can run additional sweeps; these candidate executions are not added to the original report's scenario count.
 
 ## Adapters
 
@@ -133,6 +158,58 @@ The short API includes two sequential and two concurrent deliveries by default. 
 - **MongoDB:** resolve the decorated `IMongoDatabase` or wrap collections with `InstrumentMongo`. Separate raw clients bypass interception. Acknowledged single-document writes are supported; transactions, bulk/multi-document writes, aggregation and administrative writes are rejected during delivery. Snapshots preserve BSON types, sort by `_id` and assume quiescence across collections.
 
 ## Diagnose and reproduce
+
+The following test uses the existing application's MediatR registrations and PostgreSQL connection. `message` is the prepared request for `CompleteStepHandler`:
+
+```csharp
+await FaultSweep
+    .For<CompleteStepHandler>(app.Services)
+    .WithPostgres(
+        infrastructure.IntegrationPostgres,
+        ignore:
+        [
+            "process_instances.UpdatedAt",
+            "step_instances.CompletedAt",
+            "event_logs.Id",
+            "event_logs.CreatedAt",
+        ])
+    .AssertIdempotentAsync(message);
+```
+
+Example failure output for `CompleteStep_IsIdempotent` (runner-specific stack frames are omitted):
+
+```text
+FaultSweep.Reporting.FaultSweepAssertionException
+FaultSweep: 8 effects, 26 scenarios, 4 violations.
+Minimal scenario: effect #8, CrashAfter, 4 deliveries.
+
+Effect #8 postgres:Commit: CrashAfter
+  Violations: RedeliveryLimitExceeded
+  Attempts: 4; succeeded: 0; failed: 4
+  Exceptions: SimulatedCrashException (1), InvalidOperationException (3)
+
+Effect #8 postgres:Commit: AppliedButFailed
+  Violations: RedeliveryLimitExceeded
+  Attempts: 4; succeeded: 0; failed: 4
+  Exceptions: InvalidOperationException (4)
+
+Duplicate deliveries: Sequential; violations: RedeliveryLimitExceeded
+  Attempts: 5; succeeded: 1; failed: 4
+  Exceptions: InvalidOperationException (4)
+
+Duplicate deliveries: Parallel; violations: RedeliveryLimitExceeded
+  Attempts: 5; succeeded: 1; failed: 4
+  Exceptions: InvalidOperationException (4)
+Minimal duplicate scenario: Sequential
+
+Call ToDetailedString() for SQL, delivery traces and regression tests.
+
+   at FaultSweep.Reporting.FaultSweepResult.ShouldHaveNoViolations()
+   at FaultSweep.FaultSweepBuilder`1.AssertIdempotentAsync[TMessage](TMessage message, CancellationToken cancellationToken)
+   at WorkflowScheduler.Tests.Integration.CompleteStepFaultSweepTests.CompleteStep_IsIdempotent()
+```
+
+Here the eight baseline effects produce 26 scenarios as described above. Only the four violating scenarios are expanded. `RedeliveryLimitExceeded` means the operation failed to recover within the allowed attempts; it does not by itself prove a state mismatch. This example has no reported state differences. The repeated `InvalidOperationException` types are counted in the compact report; call `ToDetailedString()` to inspect their messages and find the underlying cause.
 
 `result.ToString()` and assertion failures use a compact report by default: the effect and fault scenario, violation kinds, total/successful/failed attempt counts, exception types with occurrence counts, state differences, and invariant failures. SQL targets, individual delivery traces, request payloads and generated regression source are omitted.
 
