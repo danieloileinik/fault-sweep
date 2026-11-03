@@ -12,7 +12,7 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
     IServiceProvider services,
     EffectInterceptor interceptor,
     TMessage message,
-    Func<THandler, TMessage, CancellationToken, ValueTask> handle,
+    Func<THandler, TMessage, CancellationToken, ValueTask>? handle,
     Func<IServiceProvider, CancellationToken, ValueTask> reset,
     IReadOnlyList<SnapshotRegistration> snapshots,
     IReadOnlyList<InvariantRegistration<TMessage>> invariants,
@@ -22,7 +22,8 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
     MessageMinimizer<TMessage>? minimizer = null,
     DuplicateDeliveryMode? duplicateReplay = null,
     bool createHandler = false,
-    IReadOnlyCollection<IEffectInstrumentation>? additionalInstrumentation = null
+    IReadOnlyCollection<IEffectInstrumentation>? additionalInstrumentation = null,
+    Func<IServiceProvider, TMessage, CancellationToken, ValueTask>? dispatch = null
 )
     where THandler : class
 {
@@ -395,10 +396,16 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
         CancellationToken token
     )
     {
+        if (dispatch is not null)
+        {
+            await dispatch(provider, runMessage, token).ConfigureAwait(false);
+            return;
+        }
+
         THandler? handler = provider.GetService<THandler>();
         if (handler is not null || !createHandler)
         {
-            await handle(handler ?? provider.GetRequiredService<THandler>(), runMessage, token)
+            await handle!(handler ?? provider.GetRequiredService<THandler>(), runMessage, token)
                 .ConfigureAwait(false);
             return;
         }
@@ -406,7 +413,7 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
         handler = ActivatorUtilities.CreateInstance<THandler>(provider);
         try
         {
-            await handle(handler, runMessage, token).ConfigureAwait(false);
+            await handle!(handler, runMessage, token).ConfigureAwait(false);
         }
         finally
         {

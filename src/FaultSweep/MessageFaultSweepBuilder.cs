@@ -231,21 +231,32 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
             );
         }
 
-        foreach (var name in expectedStates.Keys.Where(name => !snapshots.Any(snapshot =>
-                     string.Equals(snapshot.Name, name, StringComparison.Ordinal)
-                 )))
+        foreach (
+            var name in expectedStates.Keys.Where(name =>
+                !snapshots.Any(snapshot =>
+                    string.Equals(snapshot.Name, name, StringComparison.Ordinal)
+                )
+            )
+        )
         {
             throw new InvalidOperationException(
                 $"Expected state '{name}' requires a tracked snapshot with the same name."
             );
         }
 
+        Func<IServiceProvider, TMessage, CancellationToken, ValueTask>? dispatch = handle is null
+            ? MediatRInvocation<THandler, TMessage>.Create()
+            : null;
         Func<THandler, TMessage, CancellationToken, ValueTask> invoke =
             handle ?? InvokeHandlerAsync;
-        if (handle is null && !typeof(IMessageHandler<TMessage>).IsAssignableFrom(typeof(THandler)))
+        if (
+            handle is null
+            && dispatch is null
+            && !typeof(IMessageHandler<TMessage>).IsAssignableFrom(typeof(THandler))
+        )
         {
             throw new InvalidOperationException(
-                "Implement IMessageHandler<TMessage> or configure HandleWith."
+                "Implement IMessageHandler<TMessage> or a MediatR IRequestHandler, or configure HandleWith."
             );
         }
 
@@ -274,7 +285,8 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
             options.ValidateAndCopy(),
             replay,
             minimizer,
-            duplicateReplay
+            duplicateReplay,
+            dispatch: dispatch
         );
         return runner.RunAsync(cancellationToken);
     }

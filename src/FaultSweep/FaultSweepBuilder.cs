@@ -131,10 +131,11 @@ public sealed class FaultSweepBuilder<THandler>
             );
         }
 
-        Func<THandler, TMessage, CancellationToken, ValueTask> invoke = HandlerInvocation<
-            THandler,
-            TMessage
-        >.Create();
+        Func<IServiceProvider, TMessage, CancellationToken, ValueTask>? dispatch =
+            MediatRInvocation<THandler, TMessage>.Create();
+        Func<THandler, TMessage, CancellationToken, ValueTask>? invoke = dispatch is null
+            ? HandlerInvocation<THandler, TMessage>.Create()
+            : null;
         EnvironmentRegistration[] registrations = [.. environments];
         List<ISweepEnvironment> prepared = [];
         EffectInterceptor interceptor = SweepInterceptors.For(services);
@@ -183,7 +184,8 @@ public sealed class FaultSweepBuilder<THandler>
             createHandler: true,
             additionalInstrumentation: registrations
                 .Select(registration => registration.Instrumentation)
-                .ToArray()
+                .ToArray(),
+            dispatch: dispatch
         );
 
         return runner.RunAsync(
