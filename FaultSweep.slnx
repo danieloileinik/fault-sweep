@@ -1,7 +1,4 @@
 <Solution>
-  <Folder Name="/samples/">
-    <Project Path="samples/FaultSweep.Demo/FaultSweep.Demo.csproj" />
-  </Folder>
   <Folder Name="/src/">
     <Project Path="src/FaultSweep.Kafka/FaultSweep.Kafka.csproj" />
     <Project Path="src/FaultSweep.Mongo/FaultSweep.Mongo.csproj" />

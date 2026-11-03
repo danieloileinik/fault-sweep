@@ -22,7 +22,6 @@ jobs:
       - run: dotnet restore FaultSweep.slnx
       - run: dotnet build FaultSweep.slnx -c Release --no-restore -m:1
       - run: dotnet test FaultSweep.slnx -c Release --no-build --no-restore -m:1 --logger trx --results-directory artifacts/test-results
-      - run: dotnet run --project samples/FaultSweep.Demo -c Release --no-build
       - run: dotnet pack FaultSweep.slnx -c Release --no-build --no-restore -o artifacts/packages
       - uses: actions/upload-artifact@v7.0.2
         if: always()
