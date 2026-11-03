@@ -1,11 +1,10 @@
-using System.Text.Json;
 using FaultSweep.Reporting;
 using FaultSweep.Snapshots;
 
 namespace FaultSweep.Verification;
 
-/// <summary>Read-only verification inputs after a delivery and its dependency injection scope have completed.</summary>
-public sealed class VerificationContext<TMessage>
+/// <summary>Read-only verification inputs including the current message.</summary>
+public sealed class VerificationContext<TMessage> : VerificationContext
 {
     internal VerificationContext(
         TMessage message,
@@ -15,34 +14,10 @@ public sealed class VerificationContext<TMessage>
         IReadOnlyList<DeliveryAttempt> attempts,
         DuplicateDeliveryMode? duplicates = null
     )
+        : base(services, state, scenario, attempts, duplicates)
     {
         Message = message;
-        Services = services;
-        State = state;
-        Scenario = scenario;
-        Attempts = attempts;
-        Duplicates = duplicates;
     }
 
     public TMessage Message { get; }
-
-    /// <summary>A verification scope, valid only during the callback. Use it for read-only queries.</summary>
-    public IServiceProvider Services { get; }
-
-    public IReadOnlyDictionary<string, StateSnapshot> State { get; }
-
-    /// <summary>The injected fault, or null for baseline and duplicate deliveries. Use IsBaseline to distinguish them.</summary>
-    public FaultScenario? Scenario { get; }
-
-    public DuplicateDeliveryMode? Duplicates { get; }
-
-    public bool IsBaseline => Scenario is null && Duplicates is null;
-
-    public IReadOnlyList<DeliveryAttempt> Attempts { get; }
-
-    public TState GetState<TState>(string name)
-    {
-        return State[name].Value.Deserialize<TState>()
-            ?? throw new InvalidOperationException($"Snapshot '{name}' deserialized to null.");
-    }
 }

@@ -20,17 +20,24 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
     FaultSweepOptions options,
     ReplayScenario? replay = null,
     MessageMinimizer<TMessage>? minimizer = null,
-    DuplicateDeliveryMode? duplicateReplay = null
+    DuplicateDeliveryMode? duplicateReplay = null,
+    bool createHandler = false,
+    IReadOnlyCollection<IEffectInstrumentation>? additionalInstrumentation = null
 )
     where THandler : class
 {
-    public async Task<FaultSweepResult> RunAsync(CancellationToken cancellationToken)
+    public async Task<FaultSweepResult> RunAsync(
+        CancellationToken cancellationToken,
+        Func<ValueTask>? cleanup = null
+    )
     {
         await interceptor.SweepLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             using var instrumentation = new EffectInstrumentationScope(
-                services.GetServices<IEffectInstrumentation>(),
+                services
+                    .GetServices<IEffectInstrumentation>()
+                    .Concat(additionalInstrumentation ?? []),
                 interceptor
             );
             FaultSweepResult result = (
@@ -42,7 +49,17 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
         }
         finally
         {
-            interceptor.SweepLock.Release();
+            try
+            {
+                if (cleanup is not null)
+                {
+                    await cleanup().ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                interceptor.SweepLock.Release();
+            }
         }
     }
 
@@ -52,7 +69,7 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
         CancellationToken cancellationToken
     )
     {
-        Dictionary<string, StateSnapshot> expected = expectedStates.ToDictionary(
+        var expected = expectedStates.ToDictionary(
             pair => pair.Key,
             pair =>
                 pair.Value(runMessage)
@@ -350,12 +367,7 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
             await interceptor
                 .RunAsync(
                     session,
-                    () =>
-                        handle(
-                            scope.ServiceProvider.GetRequiredService<THandler>(),
-                            runMessage,
-                            cancellationToken
-                        )
+                    () => InvokeAsync(scope.ServiceProvider, runMessage, cancellationToken)
                 )
                 .ConfigureAwait(false);
         }
@@ -375,6 +387,38 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
 
         error = session.Crash ?? error;
         return new DeliveryAttempt(attempt, error is null, error);
+    }
+
+    private async ValueTask InvokeAsync(
+        IServiceProvider provider,
+        TMessage runMessage,
+        CancellationToken token
+    )
+    {
+        THandler? handler = provider.GetService<THandler>();
+        if (handler is not null || !createHandler)
+        {
+            await handle(handler ?? provider.GetRequiredService<THandler>(), runMessage, token)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        handler = ActivatorUtilities.CreateInstance<THandler>(provider);
+        try
+        {
+            await handle(handler, runMessage, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (handler is IAsyncDisposable asynchronous)
+            {
+                await asynchronous.DisposeAsync().ConfigureAwait(false);
+            }
+            else if (handler is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
     }
 
     private static FaultScenarioResult? Smallest(FaultSweepResult result) =>
@@ -528,7 +572,7 @@ internal sealed partial class SweepRunner<THandler, TMessage>(
     }
 
     private RegressionTestCase CreateCase(TMessage runMessage, FaultScenarioResult violation) =>
-        new RegressionTestCase(
+        new(
             SerializeMessage(runMessage),
             CSharpTypeName.Format(typeof(TMessage)),
             new ReplayScenario(
