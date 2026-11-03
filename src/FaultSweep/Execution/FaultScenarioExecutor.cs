@@ -23,30 +23,18 @@ internal sealed class FaultScenarioExecutor<TMessage>(
     )
     {
         await store.ResetAsync(cancellationToken).ConfigureAwait(false);
-        var initialSession = new EffectSession(1, options.MaxEffects, scenario, baselinePoints);
-        List<DeliveryAttempt> attempts =
-        [
-            await delivery
-                .DeliverAsync(initialSession, 1, runMessage, cancellationToken)
-                .ConfigureAwait(false),
-        ];
-        List<EffectTraceEntry> trace = [.. initialSession.Trace];
-
-        for (
-            int retry = 1;
-            !attempts[^1].Succeeded
-                && retry <= (replay?.MaxRedeliveryAttempts ?? options.MaxRedeliveryAttempts);
-            retry++
-        )
-        {
-            var session = new EffectSession(retry + 1, options.MaxEffects);
-            attempts.Add(
-                await delivery
-                    .DeliverAsync(session, retry + 1, runMessage, cancellationToken)
-                    .ConfigureAwait(false)
-            );
-            trace.AddRange(session.Trace);
-        }
+        DeliveryRun run = await delivery
+            .DeliverWithRetriesAsync(
+                runMessage,
+                new DeliveryPlan(
+                    options.MaxEffects,
+                    replay?.MaxRedeliveryAttempts ?? options.MaxRedeliveryAttempts,
+                    Fault: scenario,
+                    Expected: baselinePoints
+                ),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
 
         IReadOnlyDictionary<string, StateSnapshot> state = await store
             .CaptureAsync(cancellationToken)
@@ -58,7 +46,7 @@ internal sealed class FaultScenarioExecutor<TMessage>(
                 expected,
                 baselineState,
                 scenario,
-                attempts.AsReadOnly(),
+                run.Attempts,
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -74,16 +62,23 @@ internal sealed class FaultScenarioExecutor<TMessage>(
             violations |= ViolationKind.InvariantFailed;
         }
 
-        if (!attempts[^1].Succeeded)
+        if (!run.Attempts[^1].Succeeded)
         {
             violations |= ViolationKind.RedeliveryLimitExceeded;
         }
 
-        if (!initialSession.FaultWasInjected)
+        if (!run.FaultWasInjected)
         {
             violations |= ViolationKind.FaultNotReached;
         }
 
-        return new FaultScenarioResult(scenario, violations, attempts, trace, state, verification);
+        return new FaultScenarioResult(
+            scenario,
+            violations,
+            run.Attempts,
+            run.Trace,
+            state,
+            verification
+        );
     }
 }

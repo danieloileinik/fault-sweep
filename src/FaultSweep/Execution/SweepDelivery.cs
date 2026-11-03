@@ -1,3 +1,4 @@
+using FaultSweep.Effects;
 using FaultSweep.Reporting;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -9,6 +10,39 @@ internal sealed class SweepDelivery<TMessage>(
     Func<IServiceProvider, TMessage, CancellationToken, ValueTask> invoke
 )
 {
+    public async Task<DeliveryRun> DeliverWithRetriesAsync(
+        TMessage message,
+        DeliveryPlan plan,
+        CancellationToken token
+    )
+    {
+        List<DeliveryAttempt> attempts = [];
+        List<EffectTraceEntry> trace = [];
+        bool injected = false;
+        for (int attempt = 1; attempt <= plan.MaxRedeliveryAttempts + 1; attempt++)
+        {
+            var identity = new DeliveryIdentity(plan.Delivery, attempt);
+            int number = (attempt - 1) * plan.DeliveryCount + plan.Delivery;
+            var session = new EffectSession(
+                number,
+                plan.MaxEffects,
+                attempt == 1 ? plan.Fault : null,
+                attempt == 1 ? plan.Expected : null
+            );
+            DeliveryAttempt result = await DeliverAsync(session, number, message, token)
+                .ConfigureAwait(false);
+            attempts.Add(result with { Identity = identity });
+            trace.AddRange(session.Trace.Select(entry => entry with { Identity = identity }));
+            injected |= session.FaultWasInjected;
+            if (result.Succeeded)
+            {
+                break;
+            }
+        }
+
+        return new DeliveryRun(attempts.AsReadOnly(), trace.AsReadOnly(), injected);
+    }
+
     public async ValueTask<DeliveryAttempt> DeliverAsync(
         EffectSession session,
         int attempt,

@@ -206,6 +206,29 @@ public sealed class DuplicateDeliveryTests
         Assert.Equal(3, scenario.Attempts.Count);
         Assert.Single(scenario.Attempts, attempt => !attempt.Succeeded);
         Assert.Equal(4, calls);
+        Assert.Equal(
+            [1, 2],
+            scenario.Attempts.Select(attempt => attempt.Identity.Delivery).Distinct().Order()
+        );
+        foreach (
+            IGrouping<int, DeliveryAttempt> delivery in scenario.Attempts.GroupBy(attempt =>
+                attempt.Identity.Delivery
+            )
+        )
+        {
+            Assert.Equal(
+                Enumerable.Range(1, delivery.Count()),
+                delivery.Select(attempt => attempt.Identity.Attempt)
+            );
+        }
+        Assert.All(
+            scenario.Trace,
+            entry =>
+                Assert.Equal(
+                    scenario.Attempts.Single(attempt => attempt.Number == entry.Attempt).Identity,
+                    entry.Identity
+                )
+        );
     }
 
     [Fact]
