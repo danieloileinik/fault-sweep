@@ -15,6 +15,18 @@ public static class FaultSweepPostgresBuilderExtensions
         IReadOnlyCollection<string>? ignore = null,
         string schema = "public"
     )
+        where THandler : class =>
+        WithPostgres(builder, connectionString, ignore, schema, "postgres");
+
+    /// <summary>Tracks a named PostgreSQL store with its own restoration and comparison settings.</summary>
+    public static FaultSweepBuilder<THandler> WithPostgres<THandler>(
+        this FaultSweepBuilder<THandler> builder,
+        string connectionString,
+        IReadOnlyCollection<string>? ignore,
+        string schema,
+        string name,
+        SnapshotComparisonOptions? comparison = null
+    )
         where THandler : class
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -29,9 +41,10 @@ public static class FaultSweepPostgresBuilderExtensions
         }
 
         return builder.WithEnvironment(
-            "postgres",
+            name,
             new PostgresInstrumentation(),
-            token => PostgresSweepEnvironment.CreateAsync(connectionString, schema, ignored, token)
+            token => PostgresSweepEnvironment.CreateAsync(connectionString, schema, ignored, token),
+            comparison
         );
     }
 
