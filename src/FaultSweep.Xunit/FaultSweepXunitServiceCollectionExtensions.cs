@@ -46,7 +46,7 @@ public static class FaultSweepXunitServiceCollectionExtensions
         MinimizedScenario minimum =
             result.MinimalScenario
             ?? throw new InvalidOperationException("There is no violating scenario to reproduce.");
-        var fault = minimum.Result.Scenario;
+        FaultScenario fault = minimum.Result.Scenario;
         return new XunitRegressionGenerator(options).Generate(
             new RegressionTestCase(
                 minimum.MessageJson,

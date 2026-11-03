@@ -10,7 +10,7 @@ public sealed class MongoHandler(IMongoDatabase database) : IMessageHandler<Mong
         IMongoCollection<BsonDocument> collection = database
             .GetCollection<BsonDocument>("payments")
             .WithReadPreference(ReadPreference.Primary);
-        var filter = Builders<BsonDocument>.Filter.Eq("_id", 1);
+        FilterDefinition<BsonDocument> filter = Builders<BsonDocument>.Filter.Eq("_id", 1);
         if (message.Operation == "insert")
         {
             if (await collection.CountDocumentsAsync(filter, cancellationToken: token) == 0)

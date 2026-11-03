@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Confluent.Kafka;
 using FaultSweep.Effects;
 using FaultSweep.Reporting;
@@ -107,7 +108,7 @@ public sealed class ProducerCaptureTests
         FaultSweepResult result = await host.Sweep(new PublishRequest(Mutate: true)).RunAsync();
 
         // Assert
-        var captured = result.BaselineState["produced"].Value[0];
+        JsonElement captured = result.BaselineState["produced"].Value[0];
         Assert.Equal(10, captured.GetProperty("Value").GetProperty("Amount").GetInt32());
         Assert.Equal("AQI=", captured.GetProperty("Headers")[0].GetProperty("Value").GetString());
     }

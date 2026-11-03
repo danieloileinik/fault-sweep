@@ -20,7 +20,7 @@ public sealed class StateSnapshot
 
     public static StateSnapshot FromJson(string json)
     {
-        using JsonDocument document = JsonDocument.Parse(json);
+        using var document = JsonDocument.Parse(json);
         return new StateSnapshot(document.RootElement);
     }
 

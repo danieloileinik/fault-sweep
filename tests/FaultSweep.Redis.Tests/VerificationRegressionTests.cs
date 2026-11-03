@@ -4,6 +4,7 @@ using FaultSweep.Reporting;
 using FaultSweep.Xunit;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Emit;
 
 namespace FaultSweep.Redis.Tests;
 
@@ -48,7 +49,7 @@ public sealed class VerificationRegressionTests
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
         );
         using var stream = new MemoryStream();
-        var emitted = compilation.Emit(stream);
+        EmitResult emitted = compilation.Emit(stream);
         Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
         stream.Position = 0;
         Assembly generated = AssemblyLoadContext.Default.LoadFromStream(stream);

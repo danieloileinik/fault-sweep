@@ -22,7 +22,7 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
     private ReplayScenario? replay;
     private DuplicateDeliveryMode? duplicateReplay;
     private MessageMinimizer<TMessage>? minimizer;
-    private FaultSweepOptions options = new FaultSweepOptions();
+    private FaultSweepOptions options = new();
 
     internal FaultSweepBuilder(IServiceProvider services, TMessage message)
     {
@@ -231,18 +231,13 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
             );
         }
 
-        foreach (string name in expectedStates.Keys)
+        foreach (var name in expectedStates.Keys.Where(name => !snapshots.Any(snapshot =>
+                     string.Equals(snapshot.Name, name, StringComparison.Ordinal)
+                 )))
         {
-            if (
-                !snapshots.Any(snapshot =>
-                    string.Equals(snapshot.Name, name, StringComparison.Ordinal)
-                )
-            )
-            {
-                throw new InvalidOperationException(
-                    $"Expected state '{name}' requires a tracked snapshot with the same name."
-                );
-            }
+            throw new InvalidOperationException(
+                $"Expected state '{name}' requires a tracked snapshot with the same name."
+            );
         }
 
         Func<THandler, TMessage, CancellationToken, ValueTask> invoke =

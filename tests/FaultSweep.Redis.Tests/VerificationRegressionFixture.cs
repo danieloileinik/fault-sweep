@@ -8,7 +8,7 @@ namespace FaultSweep.Redis.Tests;
 public sealed class VerificationRegressionFixture : IDisposable
 {
     private readonly ServiceProvider services;
-    private readonly MinimizeState state = new MinimizeState();
+    private readonly MinimizeState state = new();
     private readonly bool baselineBroken;
 
     public VerificationRegressionFixture(bool baselineBroken)
@@ -24,7 +24,7 @@ public sealed class VerificationRegressionFixture : IDisposable
     public bool Fixed { get; set; }
 
     public static XunitRegressionOptions Options { get; } =
-        new XunitRegressionOptions
+        new()
         {
             FixtureTypeName = "global::FaultSweep.Redis.Tests.VerificationRegressionFixture",
             CollectionName = "Business verification",

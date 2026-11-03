@@ -17,7 +17,7 @@ public sealed class SweepTestEnvironment : IDisposable
         Host = builder.Build();
     }
 
-    public TestState State { get; } = new TestState();
+    public TestState State { get; } = new();
 
     public IHost Host { get; }
 

@@ -14,8 +14,8 @@ public sealed class SnapshotTests
     public async Task Compares_structural_values_without_object_property_order(string expected, string actual)
     {
         // Arrange
-        StateSnapshot baseline = StateSnapshot.FromJson(expected);
-        StateSnapshot scenario = StateSnapshot.FromJson(actual);
+        var baseline = StateSnapshot.FromJson(expected);
+        var scenario = StateSnapshot.FromJson(actual);
 
         // Act
         FaultSweepResult result = await CompareAsync(baseline, scenario);
@@ -28,8 +28,8 @@ public sealed class SnapshotTests
     public async Task Ignores_configured_properties_at_every_level()
     {
         // Arrange
-        StateSnapshot expected = StateSnapshot.FromJson("""{"id":1,"rows":[{"id":2,"created_at":"a","amount":10}]}""");
-        StateSnapshot actual = StateSnapshot.FromJson("""{"id":9,"rows":[{"id":8,"created_at":"b","amount":10}]}""");
+        var expected = StateSnapshot.FromJson("""{"id":1,"rows":[{"id":2,"created_at":"a","amount":10}]}""");
+        var actual = StateSnapshot.FromJson("""{"id":9,"rows":[{"id":8,"created_at":"b","amount":10}]}""");
         var options = new SnapshotComparisonOptions { IgnoredProperties = ["id", "created_at"] };
 
         // Act
@@ -68,8 +68,8 @@ public sealed class SnapshotTests
     public async Task Normalizes_collection_members_before_matching(ArrayComparison mode)
     {
         // Arrange
-        StateSnapshot expected = StateSnapshot.FromJson("""[{"id":1,"name":"a"},{"id":2,"name":"b"}]""");
-        StateSnapshot actual = StateSnapshot.FromJson("""[{"id":3,"name":"b"},{"id":4,"name":"a"}]""");
+        var expected = StateSnapshot.FromJson("""[{"id":1,"name":"a"},{"id":2,"name":"b"}]""");
+        var actual = StateSnapshot.FromJson("""[{"id":3,"name":"b"},{"id":4,"name":"a"}]""");
         var options = new SnapshotComparisonOptions { ArrayComparison = mode, IgnoredProperties = ["id"] };
 
         // Act
@@ -83,8 +83,8 @@ public sealed class SnapshotTests
     public async Task Supports_custom_comparators_for_complex_fields()
     {
         // Arrange
-        StateSnapshot expected = StateSnapshot.FromJson("""{"payload":{"amount":10.0,"unit":"USD"}}""");
-        StateSnapshot actual = StateSnapshot.FromJson("""{"payload":{"amount":10.001,"unit":"USD"}}""");
+        var expected = StateSnapshot.FromJson("""{"payload":{"amount":10.0,"unit":"USD"}}""");
+        var actual = StateSnapshot.FromJson("""{"payload":{"amount":10.001,"unit":"USD"}}""");
         var options = new SnapshotComparisonOptions
         {
             Comparers = new Dictionary<string, Func<JsonElement, JsonElement, bool>>
@@ -106,8 +106,8 @@ public sealed class SnapshotTests
     public async Task Reports_missing_unexpected_and_changed_values_with_stable_paths()
     {
         // Arrange
-        StateSnapshot expected = StateSnapshot.FromJson("""{"missing":null,"changed":1,"rows":[1,2],"a.b":1}""");
-        StateSnapshot actual = StateSnapshot.FromJson("""{"extra":null,"changed":2,"rows":[1],"a.b":2}""");
+        var expected = StateSnapshot.FromJson("""{"missing":null,"changed":1,"rows":[1,2],"a.b":1}""");
+        var actual = StateSnapshot.FromJson("""{"extra":null,"changed":2,"rows":[1],"a.b":2}""");
 
         // Act
         FaultSweepResult result = await CompareAsync(expected, actual);
@@ -129,7 +129,7 @@ public sealed class SnapshotTests
     {
         // Arrange
         int[] values = [1, 2];
-        StateSnapshot snapshot = StateSnapshot.From(values);
+        var snapshot = StateSnapshot.From(values);
 
         // Act
         values[0] = 99;
@@ -142,7 +142,7 @@ public sealed class SnapshotTests
     public void Formats_object_properties_in_ordinal_order()
     {
         // Arrange
-        StateSnapshot snapshot = StateSnapshot.FromJson("""{"z":{"b":2,"a":1},"a":0}""");
+        var snapshot = StateSnapshot.FromJson("""{"z":{"b":2,"a":1},"a":0}""");
 
         // Act
         string json = snapshot.ToString();
@@ -167,8 +167,8 @@ public sealed class SnapshotTests
     public async Task Preserves_sequence_semantics_inside_event_payloads(ArrayComparison mode)
     {
         // Arrange
-        StateSnapshot expected = StateSnapshot.FromJson("""[{"steps":["debit","credit"]}]""");
-        StateSnapshot actual = StateSnapshot.FromJson("""[{"steps":["credit","debit"]}]""");
+        var expected = StateSnapshot.FromJson("""[{"steps":["debit","credit"]}]""");
+        var actual = StateSnapshot.FromJson("""[{"steps":["credit","debit"]}]""");
         var options = new SnapshotComparisonOptions { ArrayComparison = mode };
 
         // Act
@@ -182,8 +182,8 @@ public sealed class SnapshotTests
     public async Task Supports_collection_modes_at_explicit_nested_paths()
     {
         // Arrange
-        StateSnapshot expected = StateSnapshot.FromJson("""{"events":[1,2],"steps":[1,2]}""");
-        StateSnapshot actual = StateSnapshot.FromJson("""{"events":[2,1],"steps":[1,2]}""");
+        var expected = StateSnapshot.FromJson("""{"events":[1,2],"steps":[1,2]}""");
+        var actual = StateSnapshot.FromJson("""{"events":[2,1],"steps":[1,2]}""");
         var options = new SnapshotComparisonOptions
         {
             ArrayComparisons = new Dictionary<string, ArrayComparison> { ["$.events"] = ArrayComparison.Multiset }

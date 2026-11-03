@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Confluent.Kafka;
 using FaultSweep.Kafka;
 using FaultSweep.Postgres;
@@ -21,7 +22,7 @@ public sealed class MixedStoreTests(RedisFixture fixture)
         // Arrange
         string schema = "m2_" + Guid.NewGuid().ToString("N");
         string prefix = schema + ":";
-        await using NpgsqlDataSource source = NpgsqlDataSource.Create(fixture.PostgresConfiguration);
+        await using var source = NpgsqlDataSource.Create(fixture.PostgresConfiguration);
         await using (NpgsqlCommand setup = source.CreateCommand($"CREATE SCHEMA {schema}; CREATE TABLE {schema}.orders(id int PRIMARY KEY, amount int); CREATE TABLE {schema}.outbox(id int PRIMARY KEY, payload text)"))
         {
             await setup.ExecuteNonQueryAsync();
@@ -54,10 +55,10 @@ public sealed class MixedStoreTests(RedisFixture fixture)
                     .EnumerateArray().All(order => order.GetProperty("amount").GetInt32() == 10))
                 .CheckInvariant("cache matches durable state", context =>
                 {
-                    var orders = context.State["postgres"].Value.GetProperty("orders");
+                    JsonElement orders = context.State["postgres"].Value.GetProperty("orders");
                     string encodedKey = Convert.ToBase64String(Encoding.UTF8.GetBytes(context.Message.Prefix + "cache"));
                     return orders.GetArrayLength() == 1
-                        && context.State["redis"].Value.TryGetProperty(encodedKey, out var cache)
+                        && context.State["redis"].Value.TryGetProperty(encodedKey, out JsonElement cache)
                         && int.TryParse(Encoding.UTF8.GetString(Convert.FromBase64String(cache.GetProperty("Value").GetString()!)), out int amount)
                         && amount == orders[0].GetProperty("amount").GetInt32();
                 })

@@ -2,7 +2,7 @@ namespace FaultSweep.Tests;
 
 public static class ZooBehaviors
 {
-    public static TestBehavior Create(ZooCase example) => new TestBehavior(async (state, effects, token) =>
+    public static TestBehavior Create(ZooCase example) => new(async (state, effects, token) =>
     {
         switch (example)
         {

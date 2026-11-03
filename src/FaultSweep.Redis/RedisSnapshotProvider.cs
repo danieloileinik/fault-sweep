@@ -1,3 +1,4 @@
+using System.Net;
 using FaultSweep.Snapshots;
 using StackExchange.Redis;
 
@@ -10,7 +11,7 @@ public sealed class RedisSnapshotProvider(IConnectionMultiplexer connection, str
     {
         var keys = new SortedDictionary<string, RedisKey>(StringComparer.Ordinal);
         string escaped = string.Concat(prefix.Select(character => "*?[]\\".Contains(character) ? "\\" + character : character.ToString()));
-        foreach (var endpoint in connection.GetEndPoints())
+        foreach (EndPoint endpoint in connection.GetEndPoints())
         {
             IServer server = connection.GetServer(endpoint);
             if (server.IsReplica)

@@ -18,7 +18,7 @@ public sealed class EfHandler(CounterContext context) : IMessageHandler<Postgres
         }
         else
         {
-            List<Counter> counters = context.Counters.OrderBy(counter => counter.Id).ToList();
+            var counters = context.Counters.OrderBy(counter => counter.Id).ToList();
             foreach (Counter counter in counters)
             {
                 counter.Value = message.Idempotent ? 10 : counter.Value + 10;

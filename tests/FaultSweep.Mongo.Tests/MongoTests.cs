@@ -1,5 +1,6 @@
 using FaultSweep.Effects;
 using FaultSweep.Reporting;
+using FaultSweep.Snapshots;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -183,12 +184,12 @@ public sealed class MongoTests(MongoFixture fixture)
             );
 
             // Act
-            var before = await snapshots.CaptureAsync(default);
+            StateSnapshot before = await snapshots.CaptureAsync(default);
             await collection.UpdateManyAsync(
                 FilterDefinition<BsonDocument>.Empty,
                 Builders<BsonDocument>.Update.Set("created_at", "changed")
             );
-            var after = await snapshots.CaptureAsync(default);
+            StateSnapshot after = await snapshots.CaptureAsync(default);
 
             // Assert
             Assert.Equal(before.ToString(), after.ToString());

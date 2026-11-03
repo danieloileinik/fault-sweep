@@ -55,7 +55,7 @@ public sealed class MongoSnapshotProvider : ISnapshotProvider
                     document.Remove(field);
                 }
 
-                using JsonDocument json = JsonDocument.Parse(
+                using var json = JsonDocument.Parse(
                     document.ToJson(
                         new JsonWriterSettings { OutputMode = JsonOutputMode.CanonicalExtendedJson }
                     )

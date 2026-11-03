@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FaultSweep.Effects;
 using FaultSweep.Reporting;
 using FaultSweep.Snapshots;
@@ -24,7 +25,7 @@ public sealed class PostgresSnapshotTests(PostgresFixture postgres)
         StateSnapshot snapshot = await provider.CaptureAsync(CancellationToken.None);
 
         // Assert
-        var rows = snapshot.Value.GetProperty("records");
+        JsonElement rows = snapshot.Value.GetProperty("records");
         Assert.Equal(3, rows.GetArrayLength());
         Assert.Equal(1, rows[0].GetProperty("part").GetInt32());
         Assert.Equal(1, rows[0].GetProperty("id").GetInt32());
@@ -51,7 +52,7 @@ public sealed class PostgresSnapshotTests(PostgresFixture postgres)
         StateSnapshot snapshot = await provider.CaptureAsync(CancellationToken.None);
 
         // Assert
-        var rows = snapshot.Value.GetProperty("table;drop");
+        JsonElement rows = snapshot.Value.GetProperty("table;drop");
         Assert.Equal(1, rows[0].GetProperty("key\"name").GetInt32());
         Assert.False(rows[0].TryGetProperty("ignore me", out _));
     }

@@ -109,5 +109,5 @@ internal sealed class CapturingProducer<TKey, TValue>(KafkaMessageCapture captur
     }
 
     private static EffectDescriptor Describe(TopicPartition destination)
-        => new EffectDescriptor("kafka", "Produce", $"{destination.Topic}[{destination.Partition.Value}]");
+        => new("kafka", "Produce", $"{destination.Topic}[{destination.Partition.Value}]");
 }

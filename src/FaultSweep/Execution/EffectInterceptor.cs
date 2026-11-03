@@ -5,10 +5,10 @@ namespace FaultSweep.Execution;
 
 internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
 {
-    private readonly AsyncLocal<EffectSession?> current = new AsyncLocal<EffectSession?>();
+    private readonly AsyncLocal<EffectSession?> current = new();
 
     // A shared environment cannot be reset by two sweeps at once.
-    internal SemaphoreSlim SweepLock { get; } = new SemaphoreSlim(1, 1);
+    internal SemaphoreSlim SweepLock { get; } = new(1, 1);
 
     public bool IsActive => current.Value is not null;
 
@@ -42,7 +42,7 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
         }
 
         EffectPoint point = session.Begin(effect);
-        var outcome = EffectOutcome.Failed;
+        EffectOutcome outcome = EffectOutcome.Failed;
         try
         {
             FaultKind? fault = session.FaultAt(point);
@@ -92,7 +92,7 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
         }
 
         EffectPoint point = session.Begin(effect);
-        var outcome = EffectOutcome.Failed;
+        EffectOutcome outcome = EffectOutcome.Failed;
         try
         {
             FaultKind? fault = session.FaultAt(point);

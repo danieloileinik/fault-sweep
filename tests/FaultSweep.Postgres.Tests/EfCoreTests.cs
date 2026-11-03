@@ -31,7 +31,7 @@ public sealed class EfCoreTests(PostgresFixture postgres)
     {
         // Arrange
         await using TestDatabase database = await postgres.CreateDatabaseAsync();
-        await using NpgsqlDataSource source = NpgsqlDataSource.Create(database.ConnectionString);
+        await using var source = NpgsqlDataSource.Create(database.ConnectionString);
         await using var host = new PostgresTestHost(database, services =>
         {
             services.AddDbContext<CounterContext>(options =>

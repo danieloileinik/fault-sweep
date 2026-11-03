@@ -158,7 +158,7 @@ internal static class NpgsqlRuntimeHooks
         NpgsqlDataReader? reader = null;
         try
         {
-            NpgsqlBatch? batch = (NpgsqlBatch?)WrappingBatch.GetValue(command);
+            var batch = (NpgsqlBatch?)WrappingBatch.GetValue(command);
             if (
                 batch is { EnableErrorBarriers: true }
                 || batch
