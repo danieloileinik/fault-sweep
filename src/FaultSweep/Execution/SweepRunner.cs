@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using FaultSweep.Effects;
 using FaultSweep.Reporting;
 using FaultSweep.Snapshots;
@@ -7,19 +6,15 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace FaultSweep.Execution;
 
-internal sealed partial class SweepRunner<TMessage>(
+internal sealed class SweepRunner<TMessage>(
     IServiceProvider services,
     EffectInterceptor interceptor,
     TMessage message,
     SweepPlan<TMessage> plan
 )
 {
-    private readonly Func<IServiceProvider, CancellationToken, ValueTask> reset = plan.Reset;
-    private readonly IReadOnlyList<SnapshotRegistration> snapshots = plan.Snapshots;
-    private readonly IReadOnlyDictionary<string, Func<TMessage, StateSnapshot>> expectedStates =
-        plan.ExpectedStates;
-    private readonly FaultSweepOptions options = plan.Options;
-    private readonly ReplayScenario? replay = plan.Replay;
+    private readonly SweepState state = new(services, plan.Reset, plan.Snapshots);
+    private readonly SweepDelivery<TMessage> delivery = new(services, interceptor, plan.Invoke);
     private readonly SweepVerifier<TMessage> verifier = new(
         services,
         plan.Snapshots,
@@ -30,62 +25,41 @@ internal sealed partial class SweepRunner<TMessage>(
         plan.Minimizer,
         plan.Options.MaxMinimizationRuns
     );
-    private readonly DuplicateDeliveryMode? duplicateReplay = plan.DuplicateReplay;
 
     public async Task<FaultSweepResult> RunAsync(
         CancellationToken cancellationToken,
         Func<ValueTask>? cleanup = null
     )
     {
-        await interceptor.SweepLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await using SweepRunScope scope = await SweepRunScope
+            .AcquireAsync(interceptor, cleanup, cancellationToken)
+            .ConfigureAwait(false);
         try
         {
-            var instrumentation = new EffectInstrumentationScope(
-                services.GetServices<IEffectInstrumentation>().Concat(plan.Instrumentation ?? []),
-                interceptor
+            scope.Activate(
+                services.GetServices<IEffectInstrumentation>().Concat(plan.Instrumentation ?? [])
             );
-            try
-            {
-                FaultSweepResult result = (
-                    await RunOnceAsync(message, false, cancellationToken).ConfigureAwait(false)
-                )!;
-                SweepMinimum<TMessage>? minimum = await minimizer
-                    .MinimizeAsync(
-                        result,
-                        message,
-                        (candidate, token) => RunOnceAsync(candidate, true, token),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                var regressionTests = new RegressionTestPreparer<TMessage>(
-                    services.GetService<IRegressionTestGenerator>()
-                );
-                regressionTests.Attach(result, message, minimum);
-                return result;
-            }
-            catch (Exception exception)
-            {
-                instrumentation.Dispose(exception);
-                throw;
-            }
-            finally
-            {
-                instrumentation.Dispose();
-            }
+            FaultSweepResult result = (
+                await RunOnceAsync(message, false, cancellationToken).ConfigureAwait(false)
+            )!;
+            SweepMinimum<TMessage>? minimum = await minimizer
+                .MinimizeAsync(
+                    result,
+                    message,
+                    (candidate, token) => RunOnceAsync(candidate, true, token),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            var regressionTests = new RegressionTestPreparer<TMessage>(
+                services.GetService<IRegressionTestGenerator>()
+            );
+            regressionTests.Attach(result, message, minimum);
+            return result;
         }
-        finally
+        catch (Exception exception)
         {
-            try
-            {
-                if (cleanup is not null)
-                {
-                    await cleanup().ConfigureAwait(false);
-                }
-            }
-            finally
-            {
-                interceptor.SweepLock.Release();
-            }
+            scope.RecordFailure(exception);
+            throw;
         }
     }
 
@@ -95,7 +69,10 @@ internal sealed partial class SweepRunner<TMessage>(
         CancellationToken cancellationToken
     )
     {
-        var expected = expectedStates.ToDictionary(
+        FaultSweepOptions options = plan.Options;
+        ReplayScenario? replay = plan.Replay;
+        DuplicateDeliveryMode? duplicateReplay = plan.DuplicateReplay;
+        var expected = plan.ExpectedStates.ToDictionary(
             pair => pair.Key,
             pair =>
                 pair.Value(runMessage)
@@ -104,14 +81,10 @@ internal sealed partial class SweepRunner<TMessage>(
                 ),
             StringComparer.Ordinal
         );
-        await ResetAsync(cancellationToken).ConfigureAwait(false);
+        await state.ResetAsync(cancellationToken).ConfigureAwait(false);
         var baselineSession = new EffectSession(1, options.MaxEffects);
-        DeliveryAttempt baseline = await DeliverAsync(
-                baselineSession,
-                1,
-                runMessage,
-                cancellationToken
-            )
+        DeliveryAttempt baseline = await delivery
+            .DeliverAsync(baselineSession, 1, runMessage, cancellationToken)
             .ConfigureAwait(false);
         if (!baseline.Succeeded)
         {
@@ -139,9 +112,8 @@ internal sealed partial class SweepRunner<TMessage>(
             );
         }
 
-        IReadOnlyDictionary<string, StateSnapshot> baselineState = await CaptureAsync(
-                cancellationToken
-            )
+        IReadOnlyDictionary<string, StateSnapshot> baselineState = await state
+            .CaptureAsync(cancellationToken)
             .ConfigureAwait(false);
         VerificationResult baselineVerification = await verifier
             .VerifyAsync(
@@ -161,6 +133,13 @@ internal sealed partial class SweepRunner<TMessage>(
 
         EffectPoint[] points = baselineSession.Trace.Select(entry => entry.Point).ToArray();
         List<FaultScenarioResult> scenarios = [];
+        var faults = new FaultScenarioExecutor<TMessage>(
+            state,
+            delivery,
+            verifier,
+            options,
+            replay
+        );
         if (
             replay is not null
             && (
@@ -192,7 +171,8 @@ internal sealed partial class SweepRunner<TMessage>(
             {
                 var scenario = new FaultScenario(point, kind);
                 scenarios.Add(
-                    await RunScenarioAsync(
+                    await faults
+                        .RunAsync(
                             scenario,
                             points,
                             baselineState,
@@ -206,6 +186,12 @@ internal sealed partial class SweepRunner<TMessage>(
         }
 
         List<DuplicateScenarioResult> duplicates = [];
+        var duplicateScenarios = new DuplicateScenarioExecutor<TMessage>(
+            state,
+            delivery,
+            verifier,
+            options
+        );
         IReadOnlyCollection<DuplicateDeliveryMode> modes =
             duplicateReplay is { } mode ? [mode]
             : replay is null ? options.DuplicateDeliveries
@@ -213,13 +199,8 @@ internal sealed partial class SweepRunner<TMessage>(
         foreach (DuplicateDeliveryMode duplicateMode in modes)
         {
             duplicates.Add(
-                await RunDuplicatesAsync(
-                        duplicateMode,
-                        baselineState,
-                        expected,
-                        runMessage,
-                        cancellationToken
-                    )
+                await duplicateScenarios
+                    .RunAsync(duplicateMode, baselineState, expected, runMessage, cancellationToken)
                     .ConfigureAwait(false)
             );
         }
@@ -231,158 +212,5 @@ internal sealed partial class SweepRunner<TMessage>(
             scenarios,
             duplicates
         );
-    }
-
-    private async Task<FaultScenarioResult> RunScenarioAsync(
-        FaultScenario scenario,
-        IReadOnlyList<EffectPoint> baselinePoints,
-        IReadOnlyDictionary<string, StateSnapshot> baselineState,
-        IReadOnlyDictionary<string, StateSnapshot> expected,
-        TMessage runMessage,
-        CancellationToken cancellationToken
-    )
-    {
-        await ResetAsync(cancellationToken).ConfigureAwait(false);
-        var initialSession = new EffectSession(1, options.MaxEffects, scenario, baselinePoints);
-        List<DeliveryAttempt> attempts =
-        [
-            await DeliverAsync(initialSession, 1, runMessage, cancellationToken)
-                .ConfigureAwait(false),
-        ];
-        List<EffectTraceEntry> trace = [.. initialSession.Trace];
-
-        for (
-            int retry = 1;
-            !attempts[^1].Succeeded
-                && retry <= (replay?.MaxRedeliveryAttempts ?? options.MaxRedeliveryAttempts);
-            retry++
-        )
-        {
-            var session = new EffectSession(retry + 1, options.MaxEffects);
-            attempts.Add(
-                await DeliverAsync(session, retry + 1, runMessage, cancellationToken)
-                    .ConfigureAwait(false)
-            );
-            trace.AddRange(session.Trace);
-        }
-
-        IReadOnlyDictionary<string, StateSnapshot> state = await CaptureAsync(cancellationToken)
-            .ConfigureAwait(false);
-        VerificationResult verification = await verifier
-            .VerifyAsync(
-                runMessage,
-                state,
-                expected,
-                baselineState,
-                scenario,
-                attempts.AsReadOnly(),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-
-        ViolationKind violations = ViolationKind.None;
-        if (verification.Differences.Count > 0)
-        {
-            violations |= ViolationKind.StateMismatch;
-        }
-
-        if (verification.InvariantViolations.Count > 0)
-        {
-            violations |= ViolationKind.InvariantFailed;
-        }
-
-        if (!attempts[^1].Succeeded)
-        {
-            violations |= ViolationKind.RedeliveryLimitExceeded;
-        }
-
-        if (!initialSession.FaultWasInjected)
-        {
-            violations |= ViolationKind.FaultNotReached;
-        }
-
-        return new FaultScenarioResult(scenario, violations, attempts, trace, state, verification);
-    }
-
-    private async ValueTask<DeliveryAttempt> DeliverAsync(
-        EffectSession session,
-        int attempt,
-        TMessage runMessage,
-        CancellationToken cancellationToken
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        Exception? error = null;
-        try
-        {
-            // Disposal is part of a delivery: open transactions are rolled back before redelivery.
-            await using AsyncServiceScope scope = services.CreateAsyncScope();
-            await interceptor
-                .RunAsync(
-                    session,
-                    () => plan.Invoke(scope.ServiceProvider, runMessage, cancellationToken)
-                )
-                .ConfigureAwait(false);
-        }
-        catch (Exception exception)
-            when (exception is not OperationCanceledException
-                || !cancellationToken.IsCancellationRequested
-            )
-        {
-            error = exception;
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        if (session.InfrastructureFailure is not null)
-        {
-            throw session.InfrastructureFailure;
-        }
-
-        error = session.Crash ?? error;
-        return new DeliveryAttempt(attempt, error is null, error);
-    }
-
-    private async ValueTask ResetAsync(CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        await using AsyncServiceScope scope = services.CreateAsyncScope();
-        foreach (
-            ISweepParticipant participant in scope.ServiceProvider.GetServices<ISweepParticipant>()
-        )
-        {
-            await participant.ResetAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        await reset(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async ValueTask<IReadOnlyDictionary<string, StateSnapshot>> CaptureAsync(
-        CancellationToken cancellationToken
-    )
-    {
-        var state = new SortedDictionary<string, StateSnapshot>(StringComparer.Ordinal);
-        await using AsyncServiceScope scope = services.CreateAsyncScope();
-        foreach (
-            SnapshotRegistration snapshot in snapshots.OrderBy(
-                snapshot => snapshot.Name,
-                StringComparer.Ordinal
-            )
-        )
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            StateSnapshot captured = await snapshot
-                .Capture(scope.ServiceProvider, cancellationToken)
-                .ConfigureAwait(false);
-            state.Add(
-                snapshot.Name,
-                captured
-                    ?? throw new FaultSweepExecutionException(
-                        $"Snapshot provider '{snapshot.Name}' returned null."
-                    )
-            );
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        return new ReadOnlyDictionary<string, StateSnapshot>(state);
     }
 }

@@ -123,6 +123,89 @@ public sealed class InstrumentationLifetimeTests
         Assert.Same(disposalFailure, error.InnerExceptions[1]);
     }
 
+    [Fact]
+    public async Task Preserves_execution_and_all_cleanup_failures_and_releases_the_lock()
+    {
+        // Arrange
+        var executionFailure = new InvalidOperationException("capture");
+        var instrumentationFailure = new InvalidOperationException("instrumentation cleanup");
+        var environmentFailure = new InvalidOperationException("environment cleanup");
+        int releases = 0;
+        var state = new TestState();
+        using ServiceProvider services = CreateServices(
+            state,
+            new CallbackInstrumentation(_ => new CallbackDisposable(() =>
+            {
+                if (++releases == 1)
+                {
+                    throw instrumentationFailure;
+                }
+            }))
+        );
+        var environment = new CallbackSweepEnvironment(
+            () => throw executionFailure,
+            state.Reset,
+            () => throw environmentFailure
+        );
+        FaultSweepBuilder<ConventionHandler> builder = FaultSweep
+            .For<ConventionHandler>(services)
+            .WithEnvironment(
+                "state",
+                new CallbackInstrumentation(_ => new CallbackDisposable(() => { })),
+                _ => ValueTask.FromResult<ISweepEnvironment>(environment)
+            );
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        // Act
+        AggregateException error = await Assert.ThrowsAsync<AggregateException>(() =>
+            builder.CheckIdempotencyAsync(new TestMessage(), timeout.Token)
+        );
+        Reporting.FaultSweepResult next = await CreateSweep(services, state)
+            .RunAsync(timeout.Token);
+
+        // Assert
+        Assert.Equal(
+            [executionFailure, instrumentationFailure, environmentFailure],
+            error.Flatten().InnerExceptions
+        );
+        Assert.Equal(2, releases);
+        Assert.False(next.HasViolations);
+    }
+
+    [Fact]
+    public async Task Releases_the_lock_after_activation_fails()
+    {
+        // Arrange
+        int activations = 0;
+        var failure = new InvalidOperationException("activation");
+        var state = new TestState();
+        using ServiceProvider services = CreateServices(
+            state,
+            new CallbackInstrumentation(_ =>
+            {
+                if (++activations == 1)
+                {
+                    throw failure;
+                }
+
+                return new CallbackDisposable(() => { });
+            })
+        );
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        // Act
+        Exception? error = await Record.ExceptionAsync(() =>
+            CreateSweep(services, state).RunAsync(timeout.Token)
+        );
+        Reporting.FaultSweepResult next = await CreateSweep(services, state)
+            .RunAsync(timeout.Token);
+
+        // Assert
+        Assert.Same(failure, error);
+        Assert.Equal(2, activations);
+        Assert.False(next.HasViolations);
+    }
+
     private static ServiceProvider CreateServices(
         TestState state,
         params IEffectInstrumentation[] instrumentations

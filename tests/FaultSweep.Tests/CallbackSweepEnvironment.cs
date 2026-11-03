@@ -2,8 +2,11 @@ using FaultSweep.Snapshots;
 
 namespace FaultSweep.Tests;
 
-internal sealed class CallbackSweepEnvironment(Func<StateSnapshot> capture, Action reset)
-    : ISweepEnvironment
+internal sealed class CallbackSweepEnvironment(
+    Func<StateSnapshot> capture,
+    Action reset,
+    Action? dispose = null
+) : ISweepEnvironment
 {
     public ValueTask<StateSnapshot> CaptureAsync(CancellationToken cancellationToken) =>
         ValueTask.FromResult(capture());
@@ -14,5 +17,9 @@ internal sealed class CallbackSweepEnvironment(Func<StateSnapshot> capture, Acti
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public ValueTask DisposeAsync()
+    {
+        dispose?.Invoke();
+        return ValueTask.CompletedTask;
+    }
 }

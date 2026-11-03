@@ -5,9 +5,14 @@ using FaultSweep.Verification;
 
 namespace FaultSweep.Execution;
 
-internal sealed partial class SweepRunner<TMessage>
+internal sealed class DuplicateScenarioExecutor<TMessage>(
+    SweepState store,
+    SweepDelivery<TMessage> executor,
+    SweepVerifier<TMessage> verifier,
+    FaultSweepOptions options
+)
 {
-    private async Task<DuplicateScenarioResult> RunDuplicatesAsync(
+    public async Task<DuplicateScenarioResult> RunAsync(
         DuplicateDeliveryMode mode,
         IReadOnlyDictionary<string, StateSnapshot> baseline,
         IReadOnlyDictionary<string, StateSnapshot> expected,
@@ -15,7 +20,7 @@ internal sealed partial class SweepRunner<TMessage>
         CancellationToken token
     )
     {
-        await ResetAsync(token).ConfigureAwait(false);
+        await store.ResetAsync(token).ConfigureAwait(false);
         (List<DeliveryAttempt> Attempts, List<EffectTraceEntry> Trace)[] deliveries;
         if (mode == DuplicateDeliveryMode.Sequential)
         {
@@ -27,53 +32,7 @@ internal sealed partial class SweepRunner<TMessage>
         }
         else
         {
-            var ready = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
-            var start = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
-            int waiting = 0;
-            Task<(List<DeliveryAttempt>, List<EffectTraceEntry>)> Launch(int delivery) =>
-                Task.Run(
-                    async () =>
-                    {
-                        if (Interlocked.Increment(ref waiting) == 2)
-                        {
-                            ready.SetResult();
-                        }
-
-                        await start.Task.WaitAsync(token).ConfigureAwait(false);
-                        return await DeliverDuplicateAsync(delivery, runMessage, token)
-                            .ConfigureAwait(false);
-                    },
-                    token
-                );
-
-            Task<(List<DeliveryAttempt>, List<EffectTraceEntry>)>[] tasks = [Launch(0), Launch(1)];
-            try
-            {
-                await ready.Task.WaitAsync(token).ConfigureAwait(false);
-            }
-            catch
-            {
-                start.TrySetResult();
-                try
-                {
-                    await Task.WhenAll(tasks).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Observe both deliveries before propagating cancellation from the start gate.
-                }
-
-                throw;
-            }
-
-            start.TrySetResult();
-
-            // Wait for both deliveries before snapshots, reset, or propagating an infrastructure failure.
-            deliveries = await Task.WhenAll(tasks).ConfigureAwait(false);
+            deliveries = await DeliverConcurrentlyAsync(runMessage, token).ConfigureAwait(false);
         }
 
         DeliveryAttempt[] attempts = deliveries
@@ -85,7 +44,8 @@ internal sealed partial class SweepRunner<TMessage>
             .OrderBy(entry => entry.Attempt)
             .ThenBy(entry => entry.Point.Index)
             .ToArray();
-        IReadOnlyDictionary<string, StateSnapshot> state = await CaptureAsync(token)
+        IReadOnlyDictionary<string, StateSnapshot> state = await store
+            .CaptureAsync(token)
             .ConfigureAwait(false);
         VerificationResult verification = await verifier
             .VerifyAsync(
@@ -112,6 +72,34 @@ internal sealed partial class SweepRunner<TMessage>
     private async Task<(
         List<DeliveryAttempt> Attempts,
         List<EffectTraceEntry> Trace
+    )[]> DeliverConcurrentlyAsync(TMessage runMessage, CancellationToken token)
+    {
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int waiting = 0;
+        Task<(List<DeliveryAttempt>, List<EffectTraceEntry>)> Launch(int deliveryIndex) =>
+            Task.Run(
+                async () =>
+                {
+                    if (Interlocked.Increment(ref waiting) == 2)
+                    {
+                        start.TrySetResult();
+                    }
+
+                    await start.Task.WaitAsync(token).ConfigureAwait(false);
+                    return await DeliverDuplicateAsync(deliveryIndex, runMessage, token)
+                        .ConfigureAwait(false);
+                },
+                token
+            );
+
+        Task<(List<DeliveryAttempt>, List<EffectTraceEntry>)>[] tasks = [Launch(0), Launch(1)];
+        // Observe both deliveries before capture, reset, or propagating cancellation and infrastructure failures.
+        return await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
+
+    private async Task<(
+        List<DeliveryAttempt> Attempts,
+        List<EffectTraceEntry> Trace
     )> DeliverDuplicateAsync(int delivery, TMessage runMessage, CancellationToken token)
     {
         List<DeliveryAttempt> attempts = [];
@@ -120,7 +108,8 @@ internal sealed partial class SweepRunner<TMessage>
         {
             int number = retry * 2 + delivery + 1;
             var session = new EffectSession(number, options.MaxEffects);
-            DeliveryAttempt attempt = await DeliverAsync(session, number, runMessage, token)
+            DeliveryAttempt attempt = await executor
+                .DeliverAsync(session, number, runMessage, token)
                 .ConfigureAwait(false);
             attempts.Add(attempt);
             trace.AddRange(session.Trace);
