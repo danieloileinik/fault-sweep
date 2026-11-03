@@ -33,16 +33,28 @@ internal sealed partial class SweepRunner<TMessage>(
         await interceptor.SweepLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            using var instrumentation = new EffectInstrumentationScope(
+            var instrumentation = new EffectInstrumentationScope(
                 services.GetServices<IEffectInstrumentation>().Concat(plan.Instrumentation ?? []),
                 interceptor
             );
-            FaultSweepResult result = (
-                await RunOnceAsync(message, false, cancellationToken).ConfigureAwait(false)
-            )!;
-            await MinimizeAsync(result, cancellationToken).ConfigureAwait(false);
-            AttachRegressionTests(result, message);
-            return result;
+            try
+            {
+                FaultSweepResult result = (
+                    await RunOnceAsync(message, false, cancellationToken).ConfigureAwait(false)
+                )!;
+                await MinimizeAsync(result, cancellationToken).ConfigureAwait(false);
+                AttachRegressionTests(result, message);
+                return result;
+            }
+            catch (Exception exception)
+            {
+                instrumentation.Dispose(exception);
+                throw;
+            }
+            finally
+            {
+                instrumentation.Dispose();
+            }
         }
         finally
         {

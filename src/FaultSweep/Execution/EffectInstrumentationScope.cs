@@ -6,7 +6,10 @@ internal sealed class EffectInstrumentationScope : IDisposable
 {
     private readonly List<IDisposable> scopes = [];
 
-    public EffectInstrumentationScope(IEnumerable<IEffectInstrumentation> instrumentations, IEffectInterceptor interceptor)
+    public EffectInstrumentationScope(
+        IEnumerable<IEffectInstrumentation> instrumentations,
+        IEffectInterceptor interceptor
+    )
     {
         try
         {
@@ -15,20 +18,38 @@ internal sealed class EffectInstrumentationScope : IDisposable
                 scopes.Add(instrumentation.Activate(interceptor));
             }
         }
-        catch
+        catch (Exception exception)
         {
-            Dispose();
+            Dispose(exception);
             throw;
         }
     }
 
-    public void Dispose()
+    public void Dispose() => Dispose(null);
+
+    public void Dispose(Exception? failure)
     {
-        for (int index = scopes.Count - 1; index >= 0; index--)
+        IDisposable[] active = scopes.ToArray();
+        scopes.Clear();
+        List<Exception> failures = [];
+        for (int index = active.Length - 1; index >= 0; index--)
         {
-            scopes[index].Dispose();
+            try
+            {
+                active[index].Dispose();
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+            }
         }
 
-        scopes.Clear();
+        if (failures.Count > 0)
+        {
+            throw new AggregateException(
+                "Failed to release FaultSweep instrumentation scopes.",
+                failure is null ? failures : [failure, .. failures]
+            );
+        }
     }
 }
