@@ -1,6 +1,6 @@
 # FaultSweep
 
-FaultSweep automates idempotency testing for .NET 10 services that interact with other services. It checks that failures, retries and duplicate deliveries do not repeat business effects, such as charging a payment twice.
+FaultSweep automates idempotency testing for .NET services that interact with other services. It checks that failures, retries and duplicate deliveries do not repeat business effects, such as charging a payment twice.
 
 Instead of writing a separate test for every failure point, run your real handler through FaultSweep. It injects failures around database operations and message publication, redelivers the same message, and checks the final state. Use it in automated tests to catch duplicate writes, lost updates and incomplete recovery.
 
@@ -135,11 +135,9 @@ all scenarios   = N × K + D
 
 The short API enables both duplicate modes by default, so **8 effects produce 8 × 3 + 2 = 26 scenarios**: 24 fault scenarios, one sequential-duplicate scenario and one parallel-duplicate scenario. The detailed builder defaults to no duplicate modes, so the same trace produces 24 scenarios until `WithDuplicateDeliveries()` is enabled.
 
-The clean baseline is an additional execution and is **not** included in the scenario count. A delivery attempt is not a new scenario either. With the default `MaxRedeliveryAttempts = 3`, a fault scenario can make up to four attempts: the initial delivery plus three retries. A duplicate scenario has two initial deliveries and can make up to eight attempts if both need all retries. Thus `Attempts: 5; succeeded: 1; failed: 4` means one delivery succeeded and the other exhausted its four attempts.
-
 `FaultSweepOptions.FaultKinds` selects the fault kinds; `DuplicateDeliveries` selects the duplicate modes. `WithOptions` replaces all options, including duplicate modes. For the detailed builder, call `WithDuplicateDeliveries()` after `WithOptions` if both modes are wanted. `MaxEffects` defaults to 20 per delivery and is a guard: exceeding it fails the sweep instead of truncating the trace or sampling effects.
 
-FaultSweep explores the effect boundaries observed in the baseline, with one injected fault per scenario. It does not enumerate combinations of faults or every possible concurrent schedule. `ReplayScenario` selects one fault scenario; `ReplayDuplicates` selects one duplicate mode. Both still execute a baseline, and neither runs the remaining scenarios. Message minimization can run additional sweeps; these candidate executions are not added to the original report's scenario count.
+FaultSweep explores the effect boundaries observed in the baseline, with one injected fault per scenario. It does not enumerate combinations of faults or every possible concurrent schedule. `ReplayScenario` selects one fault scenario; `ReplayDuplicates` selects one duplicate mode. Both still execute a baseline, and neither runs the remaining scenarios.
 
 ## Adapters
 
