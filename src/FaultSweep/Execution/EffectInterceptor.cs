@@ -9,7 +9,6 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
 
     // A shared environment cannot be reset by two sweeps at once.
     internal SemaphoreSlim SweepLock { get; } = new(1, 1);
-
     public bool IsActive => current.Value is not null;
 
     [DoesNotReturn]
@@ -24,11 +23,14 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
     public void Execute(EffectDescriptor effect, Action operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        Execute(effect, () =>
-        {
-            operation();
-            return true;
-        });
+        Execute(
+            effect,
+            () =>
+            {
+                operation();
+                return true;
+            }
+        );
     }
 
     public TResult Execute<TResult>(EffectDescriptor effect, Func<TResult> operation)
@@ -55,7 +57,10 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
             TResult result = operation();
             if (fault is FaultKind.CrashAfter or FaultKind.AppliedButFailed)
             {
-                outcome = fault == FaultKind.CrashAfter ? EffectOutcome.CrashAfter : EffectOutcome.AppliedButFailed;
+                outcome =
+                    fault == FaultKind.CrashAfter
+                        ? EffectOutcome.CrashAfter
+                        : EffectOutcome.AppliedButFailed;
                 throw session.Inject(point, fault.Value);
             }
 
@@ -68,19 +73,30 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
         }
     }
 
-    public async ValueTask ExecuteAsync(EffectDescriptor effect, Func<CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken = default)
+    public async ValueTask ExecuteAsync(
+        EffectDescriptor effect,
+        Func<CancellationToken, ValueTask> operation,
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(operation);
-        await ExecuteAsync(effect, async token =>
-        {
-            await operation(token).ConfigureAwait(false);
-            return true;
-        }, cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(
+                effect,
+                async token =>
+                {
+                    await operation(token).ConfigureAwait(false);
+                    return true;
+                },
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
-    public async ValueTask<TResult> ExecuteAsync<TResult>(EffectDescriptor effect,
-        Func<CancellationToken, ValueTask<TResult>> operation, CancellationToken cancellationToken = default)
+    public async ValueTask<TResult> ExecuteAsync<TResult>(
+        EffectDescriptor effect,
+        Func<CancellationToken, ValueTask<TResult>> operation,
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(effect);
         ArgumentNullException.ThrowIfNull(operation);
@@ -105,7 +121,10 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
             TResult result = await operation(cancellationToken).ConfigureAwait(false);
             if (fault is FaultKind.CrashAfter or FaultKind.AppliedButFailed)
             {
-                outcome = fault == FaultKind.CrashAfter ? EffectOutcome.CrashAfter : EffectOutcome.AppliedButFailed;
+                outcome =
+                    fault == FaultKind.CrashAfter
+                        ? EffectOutcome.CrashAfter
+                        : EffectOutcome.AppliedButFailed;
                 throw session.Inject(point, fault.Value);
             }
 

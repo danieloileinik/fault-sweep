@@ -10,6 +10,7 @@ public sealed class MongoFixture : IAsyncLifetime
     private readonly MongoDbContainer container = new MongoDbBuilder(
         "mongo:9.0.4@sha256:452bdaf2127b8ff851e31410a267809b9829eded219979f2210e7c7efb85a058"
     ).Build();
+
     public IMongoClient Client { get; private set; } = null!;
 
     public async Task InitializeAsync()

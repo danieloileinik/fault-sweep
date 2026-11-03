@@ -26,27 +26,16 @@ public sealed class FaultSweepResult
     }
 
     public IReadOnlyDictionary<string, StateSnapshot> BaselineState { get; }
-
     public IReadOnlyList<EffectTraceEntry> BaselineTrace { get; }
-
     public VerificationResult BaselineVerification { get; }
-
     public RegressionTestCase? BaselineRegressionCase { get; internal set; }
-
     public string? BaselineRegressionTest { get; internal set; }
-
     public IReadOnlyList<FaultScenarioResult> Scenarios { get; }
-
     public IReadOnlyList<FaultScenarioResult> Violations { get; }
-
     public MinimizedScenario? MinimalScenario { get; internal set; }
-
     public IReadOnlyList<DuplicateScenarioResult> DuplicateScenarios { get; }
-
     public IReadOnlyList<DuplicateScenarioResult> DuplicateViolations { get; }
-
     public MinimizedDuplicateScenario? MinimalDuplicateScenario { get; internal set; }
-
     public bool HasViolations =>
         BaselineVerification.HasViolations || Violations.Count > 0 || DuplicateViolations.Count > 0;
 

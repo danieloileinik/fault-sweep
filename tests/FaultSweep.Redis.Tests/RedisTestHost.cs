@@ -10,6 +10,7 @@ public sealed class RedisTestHost : IAsyncDisposable
     public ServiceProvider Services { get; }
 
     private readonly IDatabase database;
+
     public RedisTestHost(IConnectionMultiplexer connection, bool generate = false)
     {
         database = connection.GetDatabase();
@@ -20,12 +21,14 @@ public sealed class RedisTestHost : IAsyncDisposable
         services.AddScoped<RedisHandler>();
         if (generate)
         {
-            services.AddFaultSweepXunit(new XunitRegressionOptions
-            {
-                FixtureTypeName = "global::FaultSweep.Redis.Tests.RedisFixture",
-                CollectionName = RedisCollection.Name,
-                Namespace = "Generated"
-            });
+            services.AddFaultSweepXunit(
+                new XunitRegressionOptions
+                {
+                    FixtureTypeName = "global::FaultSweep.Redis.Tests.RedisFixture",
+                    CollectionName = RedisCollection.Name,
+                    Namespace = "Generated",
+                }
+            );
         }
 
         Services = services.BuildServiceProvider();
@@ -33,12 +36,17 @@ public sealed class RedisTestHost : IAsyncDisposable
 
     public FaultSweepBuilder<RedisHandler, RedisRequest> CreateSweep(RedisRequest request)
     {
-        return FaultSweep.For<RedisHandler>(Services).WithMessage(request)
-            .ResetWith(async (_, token) =>
-            {
-                token.ThrowIfCancellationRequested();
-                await database.KeyDeleteAsync(request.Prefix + "value");
-            }).TrackRedis(request.Prefix);
+        return FaultSweep
+            .For<RedisHandler>(Services)
+            .WithMessage(request)
+            .ResetWith(
+                async (_, token) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    await database.KeyDeleteAsync(request.Prefix + "value");
+                }
+            )
+            .TrackRedis(request.Prefix);
     }
 
     public ValueTask DisposeAsync() => Services.DisposeAsync();

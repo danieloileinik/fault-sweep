@@ -22,19 +22,16 @@ public class VerificationContext
         Duplicates = duplicates;
     }
 
+    // csharpier-ignore-start -- Keep consecutive properties together.
     /// <summary>A verification scope, valid only during the callback. Use it for read-only queries.</summary>
     public IServiceProvider Services { get; }
-
     public IReadOnlyDictionary<string, StateSnapshot> State { get; }
-
     /// <summary>The injected fault, or null for baseline and duplicate deliveries. Use IsBaseline to distinguish them.</summary>
     public FaultScenario? Scenario { get; }
-
     public DuplicateDeliveryMode? Duplicates { get; }
-
     public bool IsBaseline => Scenario is null && Duplicates is null;
-
     public IReadOnlyList<DeliveryAttempt> Attempts { get; }
+    // csharpier-ignore-end
 
     public TState GetState<TState>(string name)
     {

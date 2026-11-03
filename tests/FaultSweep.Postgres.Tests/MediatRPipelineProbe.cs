@@ -6,7 +6,6 @@ public sealed class MediatRPipelineProbe
 {
     public ConcurrentDictionary<CounterContext, ConcurrentQueue<string>> Deliveries { get; } =
         new();
-
     public ConcurrentBag<CancellationToken> Tokens { get; } = [];
 
     public void Record(CounterContext context, string stage, CancellationToken token)

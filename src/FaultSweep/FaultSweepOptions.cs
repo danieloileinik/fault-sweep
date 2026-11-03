@@ -4,23 +4,19 @@ namespace FaultSweep;
 
 public sealed record FaultSweepOptions
 {
+    // csharpier-ignore-start -- Keep consecutive properties together.
     public int MaxEffects { get; init; } = 20;
-
     /// <summary>The number of deliveries allowed after the initial faulted delivery.</summary>
     public int MaxRedeliveryAttempts { get; init; } = 3;
-
     public IReadOnlyCollection<FaultKind> FaultKinds { get; init; } =
     [FaultKind.CrashBefore, FaultKind.CrashAfter, FaultKind.AppliedButFailed];
-
     public bool AllowEmptyTrace { get; init; }
-
     /// <summary>Compares tracked snapshots with the clean run unless an explicit expected state replaces it.</summary>
     public bool CompareWithBaseline { get; init; } = true;
-
     public IReadOnlyCollection<DuplicateDeliveryMode> DuplicateDeliveries { get; init; } = [];
-
     /// <summary>Bounds examined shrink candidates, including invalid or cyclic candidates.</summary>
     public int MaxMinimizationRuns { get; init; } = 50;
+    // csharpier-ignore-end
 
     internal FaultSweepOptions ValidateAndCopy()
     {

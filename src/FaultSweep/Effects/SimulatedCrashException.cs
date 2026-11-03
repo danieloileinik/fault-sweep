@@ -10,6 +10,5 @@ public sealed class SimulatedCrashException : Exception
     }
 
     public EffectPoint Point { get; }
-
     public FaultKind Kind { get; }
 }

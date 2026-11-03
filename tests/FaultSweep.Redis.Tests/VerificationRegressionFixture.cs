@@ -22,7 +22,6 @@ public sealed class VerificationRegressionFixture : IDisposable
     }
 
     public bool Fixed { get; set; }
-
     public static XunitRegressionOptions Options { get; } =
         new()
         {

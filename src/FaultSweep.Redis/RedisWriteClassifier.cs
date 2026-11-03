@@ -2,6 +2,7 @@ namespace FaultSweep.Redis;
 
 internal static class RedisWriteClassifier
 {
+    // csharpier-ignore-start -- Keep consecutive fields together.
     private static readonly HashSet<string> Reads = new(StringComparer.Ordinal)
     {
         "StringGetBit",
@@ -100,7 +101,6 @@ internal static class RedisWriteClassifier
         "WaitAll",
         "TryWait",
     };
-
     private static readonly HashSet<string> RawReads = new(
         """
         BITCOUNT BITFIELD_RO BITPOS COMMAND DBSIZE DUMP ECHO EVAL_RO EVALSHA_RO EXISTS EXPIRETIME FCALL_RO
@@ -114,7 +114,6 @@ internal static class RedisWriteClassifier
         """.Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries),
         StringComparer.OrdinalIgnoreCase
     );
-
     // Commands with optional writes, such as SORT STORE, must always expose a fault boundary.
     private static readonly HashSet<string> RawWrites = new(
         """
@@ -129,6 +128,7 @@ internal static class RedisWriteClassifier
         """.Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries),
         StringComparer.OrdinalIgnoreCase
     );
+    // csharpier-ignore-end
 
     public static bool IsRead(string method)
     {

@@ -7,7 +7,8 @@ internal sealed class EffectSession(
     int attempt,
     int maxEffects,
     FaultScenario? scenario = null,
-    IReadOnlyList<EffectPoint>? expected = null)
+    IReadOnlyList<EffectPoint>? expected = null
+)
 {
     private readonly object gate = new();
     private readonly List<EffectTraceEntry> trace = [];
@@ -16,11 +17,8 @@ internal sealed class EffectSession(
     private bool closed;
 
     public bool FaultWasInjected { get; private set; }
-
     public SimulatedCrashException? Crash { get; private set; }
-
     public FaultSweepExecutionException? InfrastructureFailure { get; private set; }
-
     public IReadOnlyList<EffectTraceEntry> Trace => trace.AsReadOnly();
 
     public FaultSweepExecutionException Reject(string message)
@@ -42,7 +40,9 @@ internal sealed class EffectSession(
 
             if (closed)
             {
-                throw Fail("An effect ran after its delivery finished. Await all handler operations.");
+                throw Fail(
+                    "An effect ran after its delivery finished. Await all handler operations."
+                );
             }
 
             if (Crash is not null)
@@ -52,7 +52,9 @@ internal sealed class EffectSession(
 
             if (active)
             {
-                throw Fail("Overlapping effects are not supported in a deterministic delivery. Await each effect.");
+                throw Fail(
+                    "Overlapping effects are not supported in a deterministic delivery. Await each effect."
+                );
             }
 
             index++;
@@ -62,10 +64,15 @@ internal sealed class EffectSession(
             }
 
             var point = new EffectPoint(index, effect);
-            if (!FaultWasInjected && expected is not null &&
-                (index > expected.Count || expected[index - 1].Effect != effect))
+            if (
+                !FaultWasInjected
+                && expected is not null
+                && (index > expected.Count || expected[index - 1].Effect != effect)
+            )
             {
-                throw Fail($"The effect trace diverged from the baseline at effect #{index}: {effect}.");
+                throw Fail(
+                    $"The effect trace diverged from the baseline at effect #{index}: {effect}."
+                );
             }
 
             active = true;
@@ -106,7 +113,9 @@ internal sealed class EffectSession(
             closed = true;
             if (active)
             {
-                Fail("The handler returned while an effect was still running. Await all handler operations.");
+                Fail(
+                    "The handler returned while an effect was still running. Await all handler operations."
+                );
             }
         }
     }

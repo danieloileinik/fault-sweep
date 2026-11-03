@@ -11,6 +11,7 @@ public sealed class KafkaBrokerFixture : IAsyncLifetime
     )
         .WithKRaft()
         .Build();
+
     public string BootstrapServers => container.GetBootstrapAddress();
 
     public async Task InitializeAsync()

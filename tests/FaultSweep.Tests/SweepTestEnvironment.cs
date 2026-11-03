@@ -8,7 +8,9 @@ public sealed class SweepTestEnvironment : IDisposable
 {
     public SweepTestEnvironment(TestBehavior behavior)
     {
-        var builder = new HostApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        var builder = new HostApplicationBuilder(
+            new HostApplicationBuilderSettings { DisableDefaults = true }
+        );
         builder.Services.AddFaultSweep();
         builder.Services.AddSingleton(State);
         builder.Services.AddSingleton(behavior);
@@ -18,30 +20,40 @@ public sealed class SweepTestEnvironment : IDisposable
     }
 
     public TestState State { get; } = new();
-
     public IHost Host { get; }
 
     public FaultSweepBuilder<TestHandler, TestMessage> CreateSweep()
     {
-        return FaultSweep.For<TestHandler>(Host)
+        return FaultSweep
+            .For<TestHandler>(Host)
             .WithMessage(new TestMessage())
-            .ResetWith((services, _) =>
-            {
-                services.GetRequiredService<TestState>().Reset();
-                return ValueTask.CompletedTask;
-            })
+            .ResetWith(
+                (services, _) =>
+                {
+                    services.GetRequiredService<TestState>().Reset();
+                    return ValueTask.CompletedTask;
+                }
+            )
             .TrackSnapshot<TestSnapshotProvider>("state");
     }
 
     public void Dispose() => Host.Dispose();
 
-    public static ValueTask Apply(IEffectInterceptor effects, string name, Action operation,
-        CancellationToken token = default)
+    public static ValueTask Apply(
+        IEffectInterceptor effects,
+        string name,
+        Action operation,
+        CancellationToken token = default
+    )
     {
-        return effects.ExecuteAsync(new EffectDescriptor("memory", name), _ =>
-        {
-            operation();
-            return ValueTask.CompletedTask;
-        }, token);
+        return effects.ExecuteAsync(
+            new EffectDescriptor("memory", name),
+            _ =>
+            {
+                operation();
+                return ValueTask.CompletedTask;
+            },
+            token
+        );
     }
 }

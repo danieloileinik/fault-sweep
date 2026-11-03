@@ -11,12 +11,13 @@ public sealed record EffectDescriptor
         Target = target;
     }
 
+    // csharpier-ignore-start -- Keep consecutive properties together.
     public string Source { get; }
-
     public string Operation { get; }
-
     /// <summary>A stable label, without volatile values such as timestamps or generated IDs.</summary>
     public string? Target { get; }
+    // csharpier-ignore-end
 
-    public override string ToString() => Target is null ? $"{Source}:{Operation}" : $"{Source}:{Operation} ({Target})";
+    public override string ToString() =>
+        Target is null ? $"{Source}:{Operation}" : $"{Source}:{Operation} ({Target})";
 }

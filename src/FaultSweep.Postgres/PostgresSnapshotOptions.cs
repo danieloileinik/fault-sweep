@@ -3,9 +3,7 @@ namespace FaultSweep.Postgres;
 public sealed record PostgresSnapshotOptions
 {
     public string Schema { get; init; } = "public";
-
     public required IReadOnlyCollection<string> Tables { get; init; }
-
     public IReadOnlyCollection<string> IgnoredColumns { get; init; } = [];
 
     internal PostgresSnapshotOptions ValidateAndCopy()
@@ -25,8 +23,12 @@ public sealed record PostgresSnapshotOptions
 
         return this with
         {
-            Tables = Array.AsReadOnly(Tables.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()),
-            IgnoredColumns = Array.AsReadOnly(IgnoredColumns.Distinct(StringComparer.Ordinal).ToArray())
+            Tables = Array.AsReadOnly(
+                Tables.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()
+            ),
+            IgnoredColumns = Array.AsReadOnly(
+                IgnoredColumns.Distinct(StringComparer.Ordinal).ToArray()
+            ),
         };
     }
 
@@ -35,7 +37,10 @@ public sealed record PostgresSnapshotOptions
         ArgumentException.ThrowIfNullOrWhiteSpace(identifier);
         if (identifier.Contains('\0'))
         {
-            throw new ArgumentException("PostgreSQL identifiers cannot contain a null character.", nameof(identifier));
+            throw new ArgumentException(
+                "PostgreSQL identifiers cannot contain a null character.",
+                nameof(identifier)
+            );
         }
     }
 }
