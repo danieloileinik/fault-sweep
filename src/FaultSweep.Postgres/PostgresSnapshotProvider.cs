@@ -11,11 +11,16 @@ public sealed class PostgresSnapshotProvider : ISnapshotProvider
 {
     private readonly Func<DbConnection> connections;
     private readonly PostgresSnapshotOptions options;
+    private readonly IReadOnlyDictionary<string, string[]> tableIgnoredColumns = new Dictionary<
+        string,
+        string[]
+    >(StringComparer.Ordinal);
 
     public PostgresSnapshotProvider(DbDataSource source, PostgresSnapshotOptions options)
-        : this((source ?? throw new ArgumentNullException(nameof(source))).CreateConnection, options)
-    {
-    }
+        : this(
+            (source ?? throw new ArgumentNullException(nameof(source))).CreateConnection,
+            options
+        ) { }
 
     /// <summary>The provider owns and disposes each connection returned by this factory.</summary>
     public PostgresSnapshotProvider(Func<DbConnection> connections, PostgresSnapshotOptions options)
@@ -26,6 +31,16 @@ public sealed class PostgresSnapshotProvider : ISnapshotProvider
         this.options = options.ValidateAndCopy();
     }
 
+    internal PostgresSnapshotProvider(
+        Func<DbConnection> connections,
+        PostgresSnapshotOptions options,
+        IReadOnlyDictionary<string, string[]> tableIgnoredColumns
+    )
+        : this(connections, options)
+    {
+        this.tableIgnoredColumns = tableIgnoredColumns;
+    }
+
     public async ValueTask<StateSnapshot> CaptureAsync(CancellationToken cancellationToken)
     {
         await using DbConnection connection = connections();
@@ -34,28 +49,46 @@ public sealed class PostgresSnapshotProvider : ISnapshotProvider
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await using DbTransaction transaction = await connection.BeginTransactionAsync(
-            IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+        await using DbTransaction transaction = await connection
+            .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+            .ConfigureAwait(false);
         var tables = new SortedDictionary<string, List<JsonElement>>(StringComparer.Ordinal);
         foreach (string table in options.Tables)
         {
-            string[] primaryKey = await ReadPrimaryKeyAsync(connection, transaction, table, cancellationToken).ConfigureAwait(false);
+            string[] primaryKey = await ReadPrimaryKeyAsync(
+                    connection,
+                    transaction,
+                    table,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             if (primaryKey.Length == 0)
             {
                 throw new FaultSweepExecutionException(
-                    $"Tracked table '{options.Schema}.{table}' must exist and have a primary key for deterministic snapshots.");
+                    $"Tracked table '{options.Schema}.{table}' must exist and have a primary key for deterministic snapshots."
+                );
             }
 
             await using DbCommand command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = $"SELECT (to_jsonb(captured_row) - @ignored)::text FROM {Quote(options.Schema)}.{Quote(table)} AS captured_row ORDER BY {string.Join(", ", primaryKey.Select(Quote))}";
-            AddParameter(command, "ignored", options.IgnoredColumns.ToArray());
+            command.CommandText =
+                $"SELECT (to_jsonb(captured_row) - @ignored)::text FROM {Quote(options.Schema)}.{Quote(table)} AS captured_row ORDER BY {string.Join(", ", primaryKey.Select(Quote))}";
+            AddParameter(
+                command,
+                "ignored",
+                (string[])
+                    [.. options.IgnoredColumns, .. tableIgnoredColumns.GetValueOrDefault(table, [])]
+            );
             List<JsonElement> rows = [];
-            await using (DbDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+            await using (
+                DbDataReader reader = await command
+                    .ExecuteReaderAsync(cancellationToken)
+                    .ConfigureAwait(false)
+            )
             {
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    using JsonDocument document = JsonDocument.Parse(reader.GetString(0));
+                    using var document = JsonDocument.Parse(reader.GetString(0));
                     rows.Add(document.RootElement.Clone());
                 }
             }
@@ -67,25 +100,31 @@ public sealed class PostgresSnapshotProvider : ISnapshotProvider
         return StateSnapshot.From(tables);
     }
 
-    private async Task<string[]> ReadPrimaryKeyAsync(DbConnection connection, DbTransaction transaction, string table,
-        CancellationToken token)
+    private async Task<string[]> ReadPrimaryKeyAsync(
+        DbConnection connection,
+        DbTransaction transaction,
+        string table,
+        CancellationToken token
+    )
     {
         await using DbCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-              SELECT a.attname
-              FROM pg_catalog.pg_class c
-              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-              JOIN pg_catalog.pg_index i ON i.indrelid = c.oid AND i.indisprimary
-              CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
-              JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
-              WHERE n.nspname = @schema AND c.relname = @table AND k.position <= i.indnkeyatts
-              ORDER BY k.position
-              """;
+            SELECT a.attname
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_catalog.pg_index i ON i.indrelid = c.oid AND i.indisprimary
+            CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, position)
+            JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+            WHERE n.nspname = @schema AND c.relname = @table AND k.position <= i.indnkeyatts
+            ORDER BY k.position
+            """;
         AddParameter(command, "schema", options.Schema);
         AddParameter(command, "table", table);
         List<string> columns = [];
-        await using DbDataReader reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false);
+        await using DbDataReader reader = await command
+            .ExecuteReaderAsync(token)
+            .ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
             columns.Add(reader.GetString(0));
