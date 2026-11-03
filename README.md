@@ -134,7 +134,11 @@ The short API includes two sequential and two concurrent deliveries by default. 
 
 ## Diagnose and reproduce
 
-`result.ToString()` reports traces, differences and invariant failures. `MinimalScenario` identifies the earliest failing fault; `MinimalDuplicateScenario` identifies a failing duplicate mode.
+`result.ToString()` and assertion failures use a compact report by default: the effect and fault scenario, violation kinds, total/successful/failed attempt counts, exception types with occurrence counts, state differences, and invariant failures. SQL targets, individual delivery traces, request payloads and generated regression source are omitted.
+
+Call `result.ToDetailedString()` to include the baseline trace, SQL targets, each violating scenario's deliveries and exception messages, minimization details, and regression source. Formatting reads the captured result and does not rerun the handler or reset the database. After `AssertIdempotentAsync` or `ShouldHaveNoViolations` throws, call `ToDetailedString()` on the caught `FaultSweepAssertionException`; its `Result` property also exposes the captured result.
+
+`MinimalScenario` identifies the earliest failing fault; `MinimalDuplicateScenario` identifies a failing duplicate mode.
 
 - `ReplayScenario(new ReplayScenario(index, kind))` reruns one fault. Supply `ExpectedEffect` to guard against a changed effect.
 - `ReplayDuplicates(mode)` reruns duplicates; preserve any test barriers.
