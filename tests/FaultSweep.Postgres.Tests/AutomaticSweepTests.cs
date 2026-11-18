@@ -337,12 +337,24 @@ public sealed class AutomaticSweepTests(PostgresFixture postgres)
         await using ServiceProvider provider = services.BuildServiceProvider();
 
         // Act
-        await FaultSweep
+        FaultSweepResult result = await FaultSweep
             .For<AutomaticValueTaskHandler>(provider)
             .WithPostgres(database.ConnectionString, ignore: ["outbox.id", "outbox.created_at"])
-            .AssertIdempotentAsync(new AutomaticOrder());
+            .CheckIdempotencyAsync(new AutomaticOrder());
 
         // Assert
+        result.ShouldHaveNoViolations();
+        EffectPoint disposal = result.BaselineTrace[^1].Point;
+        Assert.Equal("UPDATE counters SET value = 11 WHERE id = 2", disposal.Effect.Target);
+        Assert.Equal(
+            11,
+            result
+                .BaselineState["postgres"]
+                .Value.GetProperty("counters")[1]
+                .GetProperty("value")
+                .GetInt32()
+        );
+        Assert.Equal(3, result.Scenarios.Count(scenario => scenario.Scenario.Point == disposal));
         Assert.True(lifetime.Created > 1);
         Assert.Equal(lifetime.Created, lifetime.Disposed);
         await AssertRestoredAsync(database);

@@ -54,12 +54,15 @@ internal sealed class SweepDelivery<TMessage>(
         Exception? error = null;
         try
         {
-            // Disposal is part of a delivery: open transactions are rolled back before redelivery.
-            await using AsyncServiceScope scope = services.CreateAsyncScope();
             await interceptor
                 .RunAsync(
                     session,
-                    () => invoke(scope.ServiceProvider, runMessage, cancellationToken)
+                    async () =>
+                    {
+                        await using AsyncServiceScope scope = services.CreateAsyncScope();
+                        await invoke(scope.ServiceProvider, runMessage, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
                 )
                 .ConfigureAwait(false);
         }

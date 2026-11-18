@@ -18,9 +18,9 @@ public sealed class AutomaticValueTaskHandler : IAsyncDisposable
         await handler.HandleAsync(message, CancellationToken.None);
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         lifetime.RecordDisposal();
-        return ValueTask.CompletedTask;
+        await database.ExecuteAsync("UPDATE counters SET value = 11 WHERE id = 2");
     }
 }
