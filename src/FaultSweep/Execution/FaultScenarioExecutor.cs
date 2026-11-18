@@ -51,22 +51,7 @@ internal sealed class FaultScenarioExecutor<TMessage>(
             )
             .ConfigureAwait(false);
 
-        ViolationKind violations = ViolationKind.None;
-        if (verification.Differences.Count > 0)
-        {
-            violations |= ViolationKind.StateMismatch;
-        }
-
-        if (verification.InvariantViolations.Count > 0)
-        {
-            violations |= ViolationKind.InvariantFailed;
-        }
-
-        if (!run.Attempts[^1].Succeeded)
-        {
-            violations |= ViolationKind.RedeliveryLimitExceeded;
-        }
-
+        ViolationKind violations = verification.GetScenarioViolations(run.Attempts[^1].Succeeded);
         if (!run.FaultWasInjected)
         {
             violations |= ViolationKind.FaultNotReached;

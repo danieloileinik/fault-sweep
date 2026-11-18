@@ -20,14 +20,7 @@ public sealed class DuplicateScenarioResult
         Trace = Array.AsReadOnly(trace.ToArray());
         State = state;
         Verification = verification;
-        Violations =
-            (verification.Differences.Count > 0 ? ViolationKind.StateMismatch : ViolationKind.None)
-            | (
-                verification.InvariantViolations.Count > 0
-                    ? ViolationKind.InvariantFailed
-                    : ViolationKind.None
-            )
-            | (!recovered ? ViolationKind.RedeliveryLimitExceeded : ViolationKind.None);
+        Violations = verification.GetScenarioViolations(recovered);
     }
 
     public DuplicateDeliveryMode Mode { get; }
