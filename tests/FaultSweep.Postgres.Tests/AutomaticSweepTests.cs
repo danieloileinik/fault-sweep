@@ -236,6 +236,86 @@ public sealed class AutomaticSweepTests(PostgresFixture postgres)
     }
 
     [Theory]
+    [InlineData("public", "counters")]
+    [InlineData("other", "detail")]
+    public async Task Rejects_table_inheritance_before_resetting_either_schema(
+        string schema,
+        string table
+    )
+    {
+        // Arrange
+        await using TestDatabase database = await postgres.CreateDatabaseAsync();
+        await database.ExecuteAsync(
+            """
+            CREATE SCHEMA other;
+            CREATE TABLE other.detail (note text, PRIMARY KEY (id)) INHERITS (public.counters);
+            INSERT INTO public.counters VALUES (1, 5);
+            INSERT INTO other.detail VALUES (2, 7, 'original');
+            """
+        );
+        var services = new ServiceCollection();
+        services.AddSingleton(database);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+
+        // Act
+        var error = await Assert.ThrowsAsync<FaultSweepExecutionException>(() =>
+            FaultSweep
+                .For<AutomaticOrderHandler>(provider)
+                .WithPostgres(database.ConnectionString, schema: schema)
+                .AssertIdempotentAsync(new AutomaticOrder())
+        );
+
+        // Assert
+        Assert.Contains("INHERITS", error.Message);
+        Assert.Contains($"{schema}.{table}", error.Message);
+        await using var connection = new NpgsqlConnection(database.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT (SELECT count(*) FROM ONLY public.counters),
+                (SELECT value FROM ONLY public.counters WHERE id = 1),
+                (SELECT note FROM ONLY other.detail WHERE id = 2 AND value = 7)
+            """,
+            connection
+        );
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1, reader.GetInt64(0));
+        Assert.Equal(5, reader.GetInt32(1));
+        Assert.Equal("original", reader.GetString(2));
+    }
+
+    [Fact]
+    public async Task Restores_seed_rows_in_declarative_partitions()
+    {
+        // Arrange
+        await using TestDatabase database = await postgres.CreateDatabaseAsync();
+        await InitializeAsync(database);
+        await database.ExecuteAsync(
+            """
+            CREATE TABLE archive (id int PRIMARY KEY) PARTITION BY LIST (id);
+            CREATE TABLE archive_one PARTITION OF archive FOR VALUES IN (1);
+            INSERT INTO archive VALUES (1);
+            """
+        );
+        var services = new ServiceCollection();
+        services.AddSingleton(database);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+
+        // Act
+        await FaultSweep
+            .For<AutomaticOrderHandler>(provider)
+            .WithPostgres(database.ConnectionString, ignore: ["outbox.id", "outbox.created_at"])
+            .AssertIdempotentAsync(new AutomaticOrder());
+
+        // Assert
+        await using var connection = new NpgsqlConnection(database.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("SELECT id FROM ONLY archive_one", connection);
+        Assert.Equal(1, await command.ExecuteScalarAsync());
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task Supports_ValueTask_without_token_and_disposes_registered_and_created_handlers(

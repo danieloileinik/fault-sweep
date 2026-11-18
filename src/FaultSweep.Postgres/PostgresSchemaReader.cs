@@ -64,7 +64,10 @@ internal sealed class PostgresSchemaReader(NpgsqlConnection connection, string s
                         WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
                             AND a.attgenerated = '' ORDER BY a.attnum),
                     EXISTS(SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = c.oid AND i.indisprimary),
-                    c.relrowsecurity
+                    c.relrowsecurity,
+                    c.relkind = 'r' AND EXISTS (
+                        SELECT 1 FROM pg_catalog.pg_inherits h
+                        WHERE h.inhparent = c.oid OR h.inhrelid = c.oid)
                 FROM pg_catalog.pg_class c
                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                 WHERE n.nspname = @schema AND c.relkind IN ('r', 'p') AND NOT c.relispartition
@@ -82,6 +85,13 @@ internal sealed class PostgresSchemaReader(NpgsqlConnection connection, string s
             while (await reader.ReadAsync(token).ConfigureAwait(false))
             {
                 string table = reader.GetString(0);
+                if (reader.GetBoolean(4))
+                {
+                    throw new FaultSweepExecutionException(
+                        $"Automatic PostgreSQL restoration does not support INHERITS tables: '{schema}.{table}'."
+                    );
+                }
+
                 if (!reader.GetBoolean(2) || reader.GetBoolean(3))
                 {
                     throw new FaultSweepExecutionException(
