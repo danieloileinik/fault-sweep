@@ -117,20 +117,6 @@ internal static class RedisOperationClassifier
         """.Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries),
         StringComparer.OrdinalIgnoreCase
     );
-    // Commands with optional writes, such as SORT STORE, must always expose a fault boundary.
-    private static readonly HashSet<string> RawWrites = new(
-        """
-        APPEND BITFIELD BITOP BLMOVE BLMPOP BLPOP BRPOP BRPOPLPUSH BZMPOP BZPOPMAX BZPOPMIN COPY DECR DECRBY DEL
-        EVAL EVALSHA EXPIRE EXPIREAT FCALL GEOADD GEORADIUS GEORADIUSBYMEMBER GEOSEARCHSTORE GETDEL GETEX GETSET
-        HDEL HEXPIRE HEXPIREAT HGETDEL HGETEX HINCRBY HINCRBYFLOAT HMSET HPERSIST HPEXPIRE HPEXPIREAT HSET HSETEX HSETNX
-        INCR INCRBY INCRBYFLOAT LINSERT LMOVE LMPOP LPOP LPUSH LPUSHX LREM LSET LTRIM MSET MSETNX
-        PERSIST PEXPIRE PEXPIREAT PFADD PFMERGE PSETEX RENAME RENAMENX RESTORE RPOP RPOPLPUSH RPUSH RPUSHX
-        SADD SDIFFSTORE SET SETBIT SETEX SETNX SETRANGE SINTERSTORE SMOVE SORT SPOP SREM SUNIONSTORE UNLINK
-        XADD XDEL XTRIM ZADD ZDIFFSTORE ZINCRBY ZINTERSTORE ZMPOP ZPOPMAX ZPOPMIN ZRANGESTORE ZREM
-        ZREMRANGEBYLEX ZREMRANGEBYRANK ZREMRANGEBYSCORE ZUNIONSTORE
-        """.Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries),
-        StringComparer.OrdinalIgnoreCase
-    );
     // csharpier-ignore-end
 
     public static bool IsRead(string method)
@@ -199,21 +185,13 @@ internal static class RedisOperationClassifier
                 return new RedisOperation();
             }
 
-            if (!RawWrites.Contains(command))
-            {
-                return new RedisOperation(
-                    Rejection: $"The raw Redis command '{command}' cannot be safely instrumented. Use a supported key command."
-                );
-            }
-
             string verb = command.ToUpperInvariant();
-            return new RedisOperation(
-                new EffectDescriptor(
-                    "redis",
-                    verb,
-                    RedisRawCommandKeys.Describe(verb, arguments[2])
+            string? targetKeys = RedisRawCommandKeys.Describe(verb, arguments[2]);
+            return targetKeys is null
+                ? new RedisOperation(
+                    Rejection: $"The raw Redis command '{command}' cannot be safely instrumented. Use a supported key command."
                 )
-            );
+                : new RedisOperation(new EffectDescriptor("redis", verb, targetKeys));
         }
 
         string target =

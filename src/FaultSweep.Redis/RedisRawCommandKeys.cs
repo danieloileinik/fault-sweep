@@ -5,9 +5,20 @@ namespace FaultSweep.Redis;
 
 internal static class RedisRawCommandKeys
 {
-    public static string Describe(string command, object? arguments)
+    private static readonly HashSet<string> SingleKeyWrites = new(
+        """
+        APPEND BITFIELD DECR DECRBY EXPIRE EXPIREAT GEOADD GETDEL GETEX GETSET HDEL HEXPIRE HEXPIREAT
+        HGETDEL HGETEX HINCRBY HINCRBYFLOAT HMSET HPERSIST HPEXPIRE HPEXPIREAT HSET HSETEX HSETNX INCR
+        INCRBY INCRBYFLOAT LINSERT LPOP LPUSH LPUSHX LREM LSET LTRIM PERSIST PEXPIRE PEXPIREAT PFADD
+        PSETEX RESTORE RPOP RPUSH RPUSHX SADD SET SETBIT SETEX SETNX SETRANGE SPOP SREM XADD XDEL
+        XTRIM ZADD ZINCRBY ZPOPMAX ZPOPMIN ZREM ZREMRANGEBYLEX ZREMRANGEBYRANK ZREMRANGEBYSCORE
+        """.Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries),
+        StringComparer.Ordinal
+    );
+
+    public static string? Describe(string command, object? arguments)
     {
-        IEnumerable<RedisValue> keys;
+        IEnumerable<RedisValue>? keys;
         if (arguments is ReadOnlyMemory<RedisKeyOrValue> memory)
         {
             keys = Keys(
@@ -35,10 +46,10 @@ internal static class RedisRawCommandKeys
         }
 
         // JSON encodes each key as base64, preserving binary keys and argument boundaries.
-        return JsonSerializer.Serialize(keys.Select(key => (byte[]?)key));
+        return keys is null ? null : JsonSerializer.Serialize(keys.Select(key => (byte[]?)key));
     }
 
-    private static IEnumerable<RedisValue> Keys(
+    private static IEnumerable<RedisValue>? Keys(
         string command,
         int length,
         Func<int, RedisValue> at
@@ -80,7 +91,8 @@ internal static class RedisRawCommandKeys
             "SORT" => Range(0, 1).Concat(OptionKeys(1)),
             "GEORADIUS" => Range(0, 1).Concat(OptionKeys(5)),
             "GEORADIUSBYMEMBER" => Range(0, 1).Concat(OptionKeys(4)),
-            _ => Range(0, 1),
+            _ when SingleKeyWrites.Contains(command) => Range(0, 1),
+            _ => null,
         };
 
         IEnumerable<RedisValue> OptionKeys(int start)

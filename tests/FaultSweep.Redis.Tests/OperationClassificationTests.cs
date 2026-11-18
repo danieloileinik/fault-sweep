@@ -103,9 +103,10 @@ public sealed class OperationClassificationTests
         object[] expectedKeys = keys.Split(' ');
 
         // Act
-        string target = RedisRawCommandKeys.Describe(command, arguments);
+        string? target = RedisRawCommandKeys.Describe(command, arguments);
 
         // Assert
+        Assert.NotNull(target);
         Assert.Equal(RedisRawCommandKeys.Describe("DEL", expectedKeys), target);
     }
 
