@@ -47,7 +47,9 @@ internal static class MongoOperationClassifier
                         && type.GetGenericTypeDefinition() == typeof(IMongoCollection<>)
                     )
             );
-        bool wrap = returnsCollection || method.ReturnType == typeof(IMongoDatabase);
+        bool wrap = returnsCollection
+            || method.ReturnType == typeof(IMongoDatabase)
+            || method.ReturnType == typeof(IMongoClient);
         if (arguments.OfType<IClientSessionHandle>().Any(session => session.IsInTransaction))
         {
             return new MongoOperation(
@@ -74,6 +76,13 @@ internal static class MongoOperationClassifier
                 Rejection: unacknowledged
                     ? "MongoDB unacknowledged writes cannot be verified."
                     : null
+            );
+        }
+
+        if (method.IsSpecialName && method.Name == "get_Cluster")
+        {
+            return new MongoOperation(
+                Rejection: "Direct MongoDB cluster access cannot be instrumented during delivery."
             );
         }
 

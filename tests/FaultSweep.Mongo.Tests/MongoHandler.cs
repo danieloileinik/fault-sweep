@@ -7,7 +7,10 @@ public sealed class MongoHandler(IMongoDatabase database) : IMessageHandler<Mong
 {
     public async ValueTask HandleAsync(MongoRequest message, CancellationToken token)
     {
-        IMongoCollection<BsonDocument> collection = database
+        IMongoDatabase target = message.Operation == "client-update"
+            ? database.Client.GetDatabase(database.DatabaseNamespace.DatabaseName)
+            : database;
+        IMongoCollection<BsonDocument> collection = target
             .GetCollection<BsonDocument>("payments")
             .WithReadPreference(ReadPreference.Primary);
         FilterDefinition<BsonDocument> filter = Builders<BsonDocument>.Filter.Eq("_id", 1);

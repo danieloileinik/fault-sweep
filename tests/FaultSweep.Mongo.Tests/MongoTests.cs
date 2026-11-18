@@ -15,6 +15,7 @@ public sealed class MongoTests(MongoFixture fixture)
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
+    [InlineData(false, true, "client-update")]
     [InlineData(true, true, "replace")]
     [InlineData(true, false, "replace")]
     [InlineData(true, true, "delete")]
