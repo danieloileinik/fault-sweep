@@ -47,56 +47,34 @@ public sealed class XunitRegressionGenerator : IRegressionTestGenerator
         string expression =
             options.MessageExpression
             ?? $"global::System.Text.Json.JsonSerializer.Deserialize<{messageType}>({Literal(testCase.MessageJson!)})!";
-        ReplayScenario? scenario = testCase.Scenario;
+        string suffix = "Baseline";
+        string scenarioDeclaration = string.Empty;
+        string run = "fixture.CreateSweep(message).RunAsync()";
         if (testCase.Duplicates is { } duplicates)
         {
-            return GenerateBaseline(messageType, expression, duplicates);
+            suffix = $"Duplicates_{duplicates}";
+            run =
+                $"fixture.CreateSweep(message).ReplayDuplicates(global::FaultSweep.Reporting.DuplicateDeliveryMode.{duplicates}).RunAsync()";
         }
-        if (scenario is null)
+        else if (testCase.Scenario is { } scenario)
         {
-            return GenerateBaseline(messageType, expression);
+            suffix = $"Effect{scenario.EffectIndex}_{scenario.Kind}";
+            string expected = scenario.ExpectedEffect is null
+                ? "null"
+                : $"new global::FaultSweep.Effects.EffectDescriptor({Literal(scenario.ExpectedEffect.Source)}, {Literal(scenario.ExpectedEffect.Operation)}, {Literal(scenario.ExpectedEffect.Target)})";
+            int retries = scenario.MaxRedeliveryAttempts ?? 3;
+            scenarioDeclaration = $$"""
+
+                        var scenario = new global::FaultSweep.Reporting.ReplayScenario(
+                            {{scenario.EffectIndex}}, global::FaultSweep.FaultKind.{{scenario.Kind}}, {{retries}}, {{expected}});
+                """;
+            run = """
+                fixture.CreateSweep(message)
+                            .ReplayScenario(scenario)
+                            .RunAsync()
+                """;
         }
 
-        string expected = scenario.ExpectedEffect is null
-            ? "null"
-            : $"new global::FaultSweep.Effects.EffectDescriptor({Literal(scenario.ExpectedEffect.Source)}, {Literal(scenario.ExpectedEffect.Operation)}, {Literal(scenario.ExpectedEffect.Target)})";
-        return $$"""
-            namespace {{options.Namespace}};
-
-            [global::Xunit.Collection({{Literal(options.CollectionName)}})]
-            public sealed class {{options.ClassName}}_Effect{{scenario.EffectIndex}}_{{scenario.Kind}}({{options.FixtureTypeName}} fixture)
-            {
-                [global::Xunit.Fact]
-                public async global::System.Threading.Tasks.Task ReproducesViolation()
-                {
-                    // Arrange
-                    {{messageType}} message = {{expression}};
-                    var scenario = new global::FaultSweep.Reporting.ReplayScenario(
-                        {{scenario.EffectIndex}}, global::FaultSweep.FaultKind.{{scenario.Kind}}, {{scenario.MaxRedeliveryAttempts
-                ?? 3}}, {{expected}});
-
-                    // Act
-                    global::FaultSweep.Reporting.FaultSweepResult result = await fixture.CreateSweep(message)
-                        .ReplayScenario(scenario)
-                        .RunAsync();
-
-                    // Assert
-                    result.ShouldHaveNoViolations();
-                }
-            }
-            """;
-    }
-
-    private string GenerateBaseline(
-        string messageType,
-        string expression,
-        DuplicateDeliveryMode? duplicates = null
-    )
-    {
-        string suffix = duplicates is null ? "Baseline" : "Duplicates_" + duplicates;
-        string run = duplicates is { } mode
-            ? $"fixture.CreateSweep(message).ReplayDuplicates(global::FaultSweep.Reporting.DuplicateDeliveryMode.{mode}).RunAsync()"
-            : "fixture.CreateSweep(message).RunAsync()";
         return $$"""
             namespace {{options.Namespace}};
 
@@ -107,7 +85,7 @@ public sealed class XunitRegressionGenerator : IRegressionTestGenerator
                 public async global::System.Threading.Tasks.Task ReproducesViolation()
                 {
                     // Arrange
-                    {{messageType}} message = {{expression}};
+                    {{messageType}} message = {{expression}};{{scenarioDeclaration}}
 
                     // Act
                     global::FaultSweep.Reporting.FaultSweepResult result = await {{run}};
