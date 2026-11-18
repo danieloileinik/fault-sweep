@@ -28,10 +28,15 @@ internal sealed class KafkaMessageCapture
         lock (session.Gate)
         {
             session.Messages.Clear();
+            session.NextOffsets.Clear();
         }
     }
 
-    public long Add<TKey, TValue>(TopicPartition destination, Message<TKey, TValue> message)
+    public long Add<TKey, TValue>(
+        TopicPartition destination,
+        Partition assignedPartition,
+        Message<TKey, TValue> message
+    )
     {
         var captured = new CapturedKafkaMessage(
             destination.Topic,
@@ -49,7 +54,9 @@ internal sealed class KafkaMessageCapture
         KafkaCaptureSession session = Session;
         lock (session.Gate)
         {
-            long offset = session.Messages.Count;
+            var key = (destination.Topic, assignedPartition.Value);
+            long offset = session.NextOffsets.GetValueOrDefault(key);
+            session.NextOffsets[key] = offset + 1;
             session.Messages.Add(captured);
             return offset;
         }

@@ -126,11 +126,14 @@ internal sealed class CapturingProducer<TKey, TValue>(KafkaMessageCapture captur
         Message<TKey, TValue> message
     )
     {
-        long offset = capture.Add(destination, message);
+        Partition assignedPartition = destination.Partition.IsSpecial
+            ? new Partition(0)
+            : destination.Partition;
+        long offset = capture.Add(destination, assignedPartition, message);
         return new DeliveryResult<TKey, TValue>
         {
             Topic = destination.Topic,
-            Partition = destination.Partition.IsSpecial ? new Partition(0) : destination.Partition,
+            Partition = assignedPartition,
             Offset = new Offset(offset),
             Message = message,
             Status = PersistenceStatus.Persisted,
