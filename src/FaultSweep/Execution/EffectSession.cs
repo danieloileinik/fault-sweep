@@ -75,18 +75,24 @@ internal sealed class EffectSession(
                 );
             }
 
+            if (FaultAt(point) == FaultKind.CrashBefore)
+            {
+                throw Inject(point, FaultKind.CrashBefore, EffectOutcome.CrashBefore);
+            }
+
             active = true;
             return point;
         }
     }
 
-    public FaultKind? FaultAt(EffectPoint point)
+    private FaultKind? FaultAt(EffectPoint point)
     {
         return !FaultWasInjected && scenario?.Point.Index == point.Index ? scenario.Kind : null;
     }
 
-    public Exception Inject(EffectPoint point, FaultKind kind)
+    private Exception Inject(EffectPoint point, FaultKind kind, EffectOutcome outcome)
     {
+        trace.Add(new EffectTraceEntry(attempt, point, outcome));
         FaultWasInjected = true;
         if (kind == FaultKind.AppliedButFailed)
         {
@@ -97,12 +103,33 @@ internal sealed class EffectSession(
         return Crash;
     }
 
-    public void Complete(EffectPoint point, EffectOutcome outcome)
+    public void Complete(EffectPoint point, bool succeeded)
     {
         lock (gate)
         {
-            trace.Add(new EffectTraceEntry(attempt, point, outcome));
             active = false;
+            if (succeeded)
+            {
+                switch (FaultAt(point))
+                {
+                    case FaultKind.CrashAfter:
+                        throw Inject(point, FaultKind.CrashAfter, EffectOutcome.CrashAfter);
+                    case FaultKind.AppliedButFailed:
+                        throw Inject(
+                            point,
+                            FaultKind.AppliedButFailed,
+                            EffectOutcome.AppliedButFailed
+                        );
+                }
+            }
+
+            trace.Add(
+                new EffectTraceEntry(
+                    attempt,
+                    point,
+                    succeeded ? EffectOutcome.Succeeded : EffectOutcome.Failed
+                )
+            );
         }
     }
 

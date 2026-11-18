@@ -44,32 +44,16 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
         }
 
         EffectPoint point = session.Begin(effect);
-        EffectOutcome outcome = EffectOutcome.Failed;
+        bool succeeded = false;
         try
         {
-            FaultKind? fault = session.FaultAt(point);
-            if (fault == FaultKind.CrashBefore)
-            {
-                outcome = EffectOutcome.CrashBefore;
-                throw session.Inject(point, fault.Value);
-            }
-
             TResult result = operation();
-            if (fault is FaultKind.CrashAfter or FaultKind.AppliedButFailed)
-            {
-                outcome =
-                    fault == FaultKind.CrashAfter
-                        ? EffectOutcome.CrashAfter
-                        : EffectOutcome.AppliedButFailed;
-                throw session.Inject(point, fault.Value);
-            }
-
-            outcome = EffectOutcome.Succeeded;
+            succeeded = true;
             return result;
         }
         finally
         {
-            session.Complete(point, outcome);
+            session.Complete(point, succeeded);
         }
     }
 
@@ -108,32 +92,16 @@ internal sealed class EffectInterceptor : IEffectInterceptor, IDisposable
         }
 
         EffectPoint point = session.Begin(effect);
-        EffectOutcome outcome = EffectOutcome.Failed;
+        bool succeeded = false;
         try
         {
-            FaultKind? fault = session.FaultAt(point);
-            if (fault == FaultKind.CrashBefore)
-            {
-                outcome = EffectOutcome.CrashBefore;
-                throw session.Inject(point, fault.Value);
-            }
-
             TResult result = await operation(cancellationToken).ConfigureAwait(false);
-            if (fault is FaultKind.CrashAfter or FaultKind.AppliedButFailed)
-            {
-                outcome =
-                    fault == FaultKind.CrashAfter
-                        ? EffectOutcome.CrashAfter
-                        : EffectOutcome.AppliedButFailed;
-                throw session.Inject(point, fault.Value);
-            }
-
-            outcome = EffectOutcome.Succeeded;
+            succeeded = true;
             return result;
         }
         finally
         {
-            session.Complete(point, outcome);
+            session.Complete(point, succeeded);
         }
     }
 
