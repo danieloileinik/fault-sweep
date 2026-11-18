@@ -194,17 +194,26 @@ internal static class RedisOperationClassifier
         if (name is "Execute" or "ExecuteResp")
         {
             string command = arguments[1]?.ToString() ?? "";
-            if (!RawReads.Contains(command) && !RawWrites.Contains(command))
+            if (RawReads.Contains(command))
+            {
+                return new RedisOperation();
+            }
+
+            if (!RawWrites.Contains(command))
             {
                 return new RedisOperation(
                     Rejection: $"The raw Redis command '{command}' cannot be safely instrumented. Use a supported key command."
                 );
             }
 
-            if (!RawWrites.Contains(command))
-            {
-                return new RedisOperation();
-            }
+            string verb = command.ToUpperInvariant();
+            return new RedisOperation(
+                new EffectDescriptor(
+                    "redis",
+                    verb,
+                    RedisRawCommandKeys.Describe(verb, arguments[2])
+                )
+            );
         }
 
         string target =

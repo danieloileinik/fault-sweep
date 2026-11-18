@@ -8,6 +8,48 @@ namespace FaultSweep.Redis.Tests;
 public sealed class RawCommandSafetyTests(RedisFixture fixture)
 {
     [Theory]
+    [InlineData("DEL", false)]
+    [InlineData("SET", true)]
+    public async Task Replay_rejects_a_changed_raw_command_or_key(string command, bool changeKey)
+    {
+        // Arrange
+        await using var host = new RedisTestHost(fixture.Connection);
+        var request = new RedisRequest("replay:" + Guid.NewGuid().ToString("N") + ":");
+        string key = request.Prefix + "value";
+        IDatabase database = fixture.Connection.GetDatabase();
+        FaultSweepResult original = await host.CreateSweep(request)
+            .HandleWith(
+                async (_, _, _) =>
+                {
+                    await database.ExecuteAsync("set", key, "initial");
+                }
+            )
+            .RunAsync();
+        var replay = new ReplayScenario(
+            1,
+            FaultKind.CrashBefore,
+            ExpectedEffect: Assert.Single(original.BaselineTrace).Point.Effect
+        );
+        object[] arguments = changeKey ? [key + "-changed", "initial"] : [key];
+
+        // Act
+        var error = await Assert.ThrowsAsync<FaultSweepExecutionException>(() =>
+            host.CreateSweep(request)
+                .HandleWith(
+                    async (_, _, _) =>
+                    {
+                        await database.ExecuteAsync(command, arguments);
+                    }
+                )
+                .ReplayScenario(replay)
+                .RunAsync()
+        );
+
+        // Assert
+        Assert.Contains("replay effect", error.Message);
+    }
+
+    [Theory]
     [InlineData("XREADGROUP", false)]
     [InlineData("XREADGROUP", true)]
     [InlineData("XGROUP", false)]
