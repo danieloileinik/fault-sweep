@@ -72,7 +72,7 @@ public sealed class PostgresSnapshotProvider : ISnapshotProvider
             await using DbCommand command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText =
-                $"SELECT (to_jsonb(captured_row) - @ignored)::text FROM {Quote(options.Schema)}.{Quote(table)} AS captured_row ORDER BY {string.Join(", ", primaryKey.Select(Quote))}";
+                $"SELECT (to_jsonb(captured_row.*) - @ignored)::text FROM {Quote(options.Schema)}.{Quote(table)} AS captured_row ORDER BY {string.Join(", ", primaryKey.Select(Quote))}";
             AddParameter(
                 command,
                 "ignored",

@@ -10,6 +10,32 @@ namespace FaultSweep.Postgres.Tests;
 public sealed class PostgresSnapshotTests(PostgresFixture postgres)
 {
     [Fact]
+    public async Task Captures_amount_changes_when_a_column_matches_the_row_alias()
+    {
+        // Arrange
+        await using TestDatabase database = await postgres.CreateDatabaseAsync();
+        await database.ExecuteAsync("""
+            CREATE TABLE payments (id int PRIMARY KEY, captured_row jsonb, amount int);
+            INSERT INTO payments VALUES (1, '{"tag":1}', 10);
+            """);
+        var provider = new PostgresSnapshotProvider(
+            () => new NpgsqlConnection(database.ConnectionString),
+            new PostgresSnapshotOptions { Tables = ["payments"] }
+        );
+
+        // Act
+        StateSnapshot before = await provider.CaptureAsync(default);
+        await database.ExecuteAsync("UPDATE payments SET amount = 20 WHERE id = 1");
+        StateSnapshot after = await provider.CaptureAsync(default);
+
+        // Assert
+        JsonElement row = after.Value.GetProperty("payments")[0];
+        Assert.Equal(10, before.Value.GetProperty("payments")[0].GetProperty("amount").GetInt32());
+        Assert.Equal(20, row.GetProperty("amount").GetInt32());
+        Assert.Equal(1, row.GetProperty("captured_row").GetProperty("tag").GetInt32());
+    }
+
+    [Fact]
     public async Task Orders_rows_by_composite_primary_key_and_removes_only_selected_columns()
     {
         // Arrange
