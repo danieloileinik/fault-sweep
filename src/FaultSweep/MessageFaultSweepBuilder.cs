@@ -166,7 +166,12 @@ public sealed class FaultSweepBuilder<THandler, TMessage>
     {
         ArgumentNullException.ThrowIfNull(scenario);
         ArgumentOutOfRangeException.ThrowIfLessThan(scenario.EffectIndex, 1);
-        if (!Enum.IsDefined(scenario.Kind) || scenario.MaxRedeliveryAttempts is < 1)
+        if (scenario.MaxRedeliveryAttempts is { } retries)
+        {
+            FaultSweepOptions.ValidateRedeliveryAttempts(retries);
+        }
+
+        if (!Enum.IsDefined(scenario.Kind))
         {
             throw new ArgumentException("Invalid replay scenario.", nameof(scenario));
         }

@@ -18,10 +18,17 @@ public sealed record FaultSweepOptions
     public int MaxMinimizationRuns { get; init; } = 50;
     // csharpier-ignore-end
 
+    internal static void ValidateRedeliveryAttempts(int attempts)
+    {
+        // Two duplicate deliveries share the same range of int attempt numbers.
+        ArgumentOutOfRangeException.ThrowIfLessThan(attempts, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(attempts, int.MaxValue / 2 - 1);
+    }
+
     internal FaultSweepOptions ValidateAndCopy()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxEffects, 1);
-        ArgumentOutOfRangeException.ThrowIfLessThan(MaxRedeliveryAttempts, 1);
+        ValidateRedeliveryAttempts(MaxRedeliveryAttempts);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxMinimizationRuns);
         ArgumentNullException.ThrowIfNull(FaultKinds);
         ArgumentNullException.ThrowIfNull(DuplicateDeliveries);
