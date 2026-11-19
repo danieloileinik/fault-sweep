@@ -53,6 +53,9 @@ internal sealed class PostgresBackupStore(NpgsqlConnection connection, PostgresR
                 .ConfigureAwait(false);
         }
 
+        await ExecuteAsync("SET CONSTRAINTS ALL IMMEDIATE", transaction, cancellationToken)
+            .ConfigureAwait(false);
+
         foreach (PostgresSequenceBackup sequence in plan.Sequences)
         {
             await using var command = new NpgsqlCommand(

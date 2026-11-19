@@ -494,6 +494,9 @@ public sealed class AutomaticSweepTests(PostgresFixture postgres)
             CREATE TABLE cycle_a(id int PRIMARY KEY, parent_id int);
             CREATE TABLE cycle_b(id int PRIMARY KEY, parent_id int REFERENCES cycle_a(id) {constraint});
             ALTER TABLE cycle_a ADD FOREIGN KEY(parent_id) REFERENCES cycle_b(id) {constraint};
+            CREATE FUNCTION keep_cycle_row() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RETURN NEW; END; $$;
+            CREATE TRIGGER keep_row BEFORE INSERT ON cycle_a FOR EACH ROW EXECUTE FUNCTION keep_cycle_row();
             INSERT INTO cycle_a VALUES(1, NULL);
             INSERT INTO cycle_b VALUES(1, 1);
             UPDATE cycle_a SET parent_id = 1;
