@@ -1,7 +1,7 @@
 # FaultSweep
 
 [![CI](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml)
-[![NuGet](https://img.shields.io/nuget/v/FaultSweep.svg)](https://www.nuget.org/packages/FaultSweep)
+[![NuGet package version 1.1.0](https://img.shields.io/badge/NuGet-1.1.0-blue.svg)](https://www.nuget.org/packages/FaultSweep)
 [![License: MIT](https://img.shields.io/github/license/danieloileinik/fault-sweep.svg)](LICENSE)
 
 Idempotency testing for .NET service handlers. FaultSweep injects a failure at every database and broker operation your handler performs, redelivers and duplicates the message, and checks that the final state matches a clean single delivery. It catches duplicate writes, lost updates and incomplete recovery, such as charging a payment twice, without a hand-written test per failure point.
@@ -11,7 +11,7 @@ Idempotency testing for .NET service handlers. FaultSweep injects a failure at e
 Install the PostgreSQL adapter in your test project.
 
 ```sh
-dotnet add package FaultSweep.Postgres --version 1.0.1
+dotnet add package FaultSweep.Postgres --version 1.1.0
 ```
 
 Use the application host and an isolated PostgreSQL database with migrations and seed data applied.
