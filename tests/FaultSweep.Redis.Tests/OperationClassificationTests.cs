@@ -4,6 +4,45 @@ namespace FaultSweep.Redis.Tests;
 
 public sealed class OperationClassificationTests
 {
+    [Fact]
+    public void Typed_descriptors_include_all_keys_in_order_without_values()
+    {
+        // Arrange
+        RedisKey first = new byte[] { 0xff };
+        RedisKey second = new byte[] { 0xfe };
+        RedisKey[] keys = [first, second];
+        KeyValuePair<RedisKey, RedisValue>[] pairs =
+        [
+            KeyValuePair.Create(first, (RedisValue)"one"),
+            KeyValuePair.Create(second, (RedisValue)"two"),
+        ];
+        var instance = new object();
+
+        // Act
+        string? rename = RedisOperationClassifier
+            .Classify("KeyRename", [instance, first, second])
+            .Effect!.Target;
+        string? changed = RedisOperationClassifier
+            .Classify("KeyRename", [instance, first, first])
+            .Effect!.Target;
+        string? delete = RedisOperationClassifier
+            .Classify("KeyDeleteAsync", [instance, keys])
+            .Effect!.Target;
+        string? set = RedisOperationClassifier
+            .Classify("StringSet", [instance, pairs])
+            .Effect!.Target;
+        string? script = RedisOperationClassifier
+            .Classify("ScriptEvaluateResp", [instance, "script", (ReadOnlyMemory<RedisKey>)keys])
+            .Effect!.Target;
+
+        // Assert
+        Assert.Equal(RedisRawCommandKeys.Describe("DEL", new object[] { first, second }), rename);
+        Assert.NotEqual(rename, changed);
+        Assert.Equal(rename, delete);
+        Assert.Equal(rename, set);
+        Assert.Equal(rename, script);
+    }
+
     [Theory]
     [InlineData("get", false, false)]
     [InlineData("SORT", true, false)]

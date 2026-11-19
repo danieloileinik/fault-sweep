@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using FaultSweep.Effects;
 using StackExchange.Redis;
 
@@ -194,9 +196,46 @@ internal static class RedisOperationClassifier
                 : new RedisOperation(new EffectDescriptor("redis", verb, targetKeys));
         }
 
-        string target =
-            arguments.Skip(1).OfType<RedisKey>().Select(key => key.ToString()).FirstOrDefault()
-            ?? "";
-        return new RedisOperation(new EffectDescriptor("redis", name, target));
+        List<RedisKey> keys = [];
+        foreach (object? argument in arguments.Skip(1))
+        {
+            switch (argument)
+            {
+                case RedisKey key:
+                    keys.Add(key);
+                    break;
+                case RedisKey[] array:
+                    keys.AddRange(array);
+                    break;
+                case ReadOnlyMemory<RedisKey> memory:
+                    keys.AddRange(memory.Span);
+                    break;
+                case KeyValuePair<RedisKey, RedisValue>[] pairs:
+                    keys.AddRange(pairs.Select(pair => pair.Key));
+                    break;
+            }
+        }
+
+        return new RedisOperation(new EffectDescriptor("redis", name, DescribeKeys(keys)));
+    }
+
+    private static string DescribeKeys(List<RedisKey> keys)
+    {
+        if (keys.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (keys is [var key] && (byte[]?)key is { Length: > 0 } bytes)
+        {
+            // Keep existing plain-text targets while reserving JSON arrays for encoded keys.
+            string text = Encoding.UTF8.GetString(bytes);
+            if (!text.StartsWith('[') && Encoding.UTF8.GetBytes(text).AsSpan().SequenceEqual(bytes))
+            {
+                return text;
+            }
+        }
+
+        return JsonSerializer.Serialize(keys.Select(key => (byte[]?)key));
     }
 }
