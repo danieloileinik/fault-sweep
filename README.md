@@ -8,14 +8,26 @@ Idempotency testing for .NET service handlers. FaultSweep injects a failure at e
 
 ## Check idempotency in integration tests
 
-Use your real application host and an isolated PostgreSQL database with migrations and seed data applied:
+Install the PostgreSQL adapter in your test project.
+
+```sh
+dotnet add package FaultSweep.Postgres --version 1.0.1
+```
+
+Use the application host and an isolated PostgreSQL database with migrations and seed data applied.
 
 ```csharp
-await FaultSweep.For<CreateOrderHandler>(factory.Services)
-    .WithPostgres(
-        postgres.GetConnectionString(),
-        ignore: ["outbox.created_at"])
-    .AssertIdempotentAsync(message);
+[Fact]
+public async Task Create_order_is_idempotent()
+{
+    var message = new CreateOrderCommand(OrderId: Guid.NewGuid(), CustomerId: 42);
+
+    await FaultSweep.For<CreateOrderHandler>(factory.Services)
+        .WithPostgres(
+            postgres.GetConnectionString(),
+            ignore: ["outbox.created_at"])
+        .AssertIdempotentAsync(message);
+}
 ```
 
 `factory.Services` is the test service provider, `postgres` is e.g. a Testcontainers container, `message` is the request to deliver repeatedly. Add `using FaultSweep.Postgres;`. Because the class and namespace share a name, add `using FaultSweep = global::FaultSweep.FaultSweep;` in the test namespace or call `global::FaultSweep.FaultSweep.For`.
@@ -37,7 +49,7 @@ Invariants run after the baseline and after every scenario, including exhausted 
 ## How scenarios work
 
 1. Restore initial data and run the request once with no faults. Record the ordered operations (**effects**) and the resulting state.
-2. Number effects from 1. Each occurrence counts separately, even for identical SQL. PostgreSQL commands (including reads) are effects, an explicit commit is another effect, an Npgsql batch is one effect. Setup, restore, snapshot and invariant queries are not counted.
+2. Number effects from 1. Each occurrence counts separately, even for identical SQL. PostgreSQL commands (including reads) are effects, an explicit commit is another effect, an Npgsql batch is one effect. Operations intercepted during delivery scope disposal also count. Setup, restore, snapshot and invariant queries are excluded.
 3. For every pair **effect × fault kind**, restore initial data and inject exactly one fault at that effect during the first delivery.
 4. Retry the same request in a fresh DI scope with no further faults, keeping the partially modified state. Stop on success or at the redelivery limit, then compare state and check invariants.
 5. Each enabled duplicate mode runs as its own scenario from initial data, with no faults: two deliveries of the same request, sequential or parallel. Failed deliveries can be retried.
@@ -106,10 +118,10 @@ result.ShouldHaveNoViolations();
 | `FaultSweep.Kafka` | `AddFaultSweepKafka<TKey, TValue>()` | `TrackProduced()` | DI producer |
 | `FaultSweep.Mongo` | `AddFaultSweepMongo(database)` | `TrackMongo(collections: [...])` | decorated `IMongoDatabase` |
 
-- **PostgreSQL:** hooks cover EF Core, Dapper and direct connections. Unsupported: `TransactionScope`, COPY/import, stored-procedure internals, batch error barriers. Tracked tables need primary keys; snapshots share a repeatable-read transaction; sequences do not roll back.
+- **PostgreSQL:** hooks cover EF Core, Dapper and direct connections. Unsupported: `TransactionScope`, COPY/import, stored-procedure internals, batch error barriers. Tracked tables need primary keys. Automatic restoration rejects tables that use `INHERITS` before resetting data. Snapshots share a repeatable-read transaction. Sequence changes from handler operations survive transaction rollback.
 - **Redis:** snapshots cover strings, hashes, lists, sets, sorted sets and streams (binary-safe values, TTL ignored). Rejected: transactions, batches, `FireAndForget`, pub/sub, stream-group mutations, unsupported raw commands. Administrative server writes bypass interception.
-- **Kafka:** captures the DI producer's messages in memory with no network sends. Snapshots include keys, payloads, topics, requested partitions and headers; comparison is a multiset (nested arrays stay ordered). Captures reset between scenarios and persist across retries. Transactions are rejected; directly constructed producers bypass capture.
-- **MongoDB:** resolve the decorated `IMongoDatabase` or wrap collections with `InstrumentMongo`; separate raw clients bypass interception. Acknowledged single-document writes are supported; transactions, bulk and multi-document writes, aggregation and administrative writes are rejected. Snapshots preserve BSON types, sort by `_id` and assume quiescence across collections.
+- **Kafka:** captures the DI producer's messages in memory with no network sends. Snapshots include keys, payloads, topics, requested partitions and headers; comparison is a multiset (nested arrays stay ordered). Captures and per-partition offsets reset between scenarios and persist across retries. Transactions are rejected; directly constructed producers bypass capture.
+- **MongoDB:** resolve the decorated `IMongoDatabase` or wrap collections with `InstrumentMongo`. The decorated database keeps interception when you obtain another database through its `Client` property. Separately constructed raw clients bypass interception. Acknowledged single-document writes are supported; transactions, bulk and multi-document writes, aggregation and administrative writes are rejected. Snapshots preserve BSON types, sort by `_id` and assume quiescence across collections.
 
 ## Reading failures and reproducing
 
@@ -160,6 +172,11 @@ Call ToDetailedString() for SQL, delivery traces and regression tests.
 - Use isolated stores, deterministic seeds and stable traces; control random IDs, clocks and background work. Sweeps sharing a service provider are serialized; separate providers need separate environments.
 - FaultSweep simulates interruption at supported atomic operations. It does not kill processes, inject network faults or model broker rebalances.
 - A passing sweep proves the configured state and checks only for the scenarios exercised.
+
+## Upgrading from 0.1.x
+
+- In invariant callbacks, use `VerificationContext.IsBaseline` and `VerificationContext.Duplicates` to identify the run type. Fault details are available in `FaultScenarioResult.Scenario` after the sweep.
+- Regenerate Redis replay tests whose `ExpectedEffect` describes a raw command such as `Execute` or `ExecuteResp`. The effect now identifies the Redis command and ordered keys.
 
 ## Development
 
