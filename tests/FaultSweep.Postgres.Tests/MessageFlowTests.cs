@@ -1,9 +1,10 @@
 using FaultSweep.Reporting;
+using Xunit.Abstractions;
 
 namespace FaultSweep.Postgres.Tests;
 
 [Collection(PostgresCollection.Name)]
-public sealed class MessageFlowTests(PostgresFixture postgres)
+public sealed class MessageFlowTests(PostgresFixture postgres, ITestOutputHelper output)
 {
     [Theory]
     [InlineData(MessageFlow.DualWrite, true)]
@@ -54,13 +55,18 @@ public sealed class MessageFlowTests(PostgresFixture postgres)
         // Act
         FaultSweepResult lost = await environment.Sweep(MessageFlow.LostEvent).RunAsync();
         FaultSweepResult duplicated = await environment.Sweep(MessageFlow.PublishBeforeCommit).RunAsync();
+        string lostReport = lost.ToString();
+        output.WriteLine(lostReport);
 
         // Assert
-        Assert.Contains(lost.Violations, violation => violation.Differences.Any(difference =>
-            difference is { Snapshot: "produced", Kind: Snapshots.DifferenceKind.Missing }));
+        Assert.Contains(lost.Violations, violation =>
+            violation.Scenario.Kind == FaultKind.CrashAfter &&
+            violation.Scenario.Point.Effect.Operation == "Commit" &&
+            violation.Differences.Any(difference =>
+                difference is { Snapshot: "produced", Kind: Snapshots.DifferenceKind.Missing }));
         Assert.Contains(duplicated.Violations, violation => violation.Differences.Any(difference =>
             difference is { Snapshot: "produced", Kind: Snapshots.DifferenceKind.Unexpected }));
-        Assert.Contains("produced", lost.ToString());
+        Assert.Contains("produced $[0]: Missing", lostReport);
         Assert.Contains("CrashAfter", duplicated.ToString());
         Assert.Contains("kafka:Produce", duplicated.ToString());
     }

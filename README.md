@@ -1,17 +1,36 @@
 # FaultSweep
 
 [![CI](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml)
-[![NuGet package version 1.1.0](https://img.shields.io/badge/NuGet-1.1.0-blue.svg)](https://www.nuget.org/packages/FaultSweep)
+[![NuGet](https://img.shields.io/nuget/v/FaultSweep.Postgres.svg)](https://www.nuget.org/packages/FaultSweep.Postgres)
 [![License: MIT](https://img.shields.io/github/license/danieloileinik/fault-sweep.svg)](LICENSE)
 
-Idempotency testing for .NET service handlers. FaultSweep injects a failure at every database and broker operation your handler performs, redelivers and duplicates the message, and checks that the final state matches a clean single delivery. It catches duplicate writes, lost updates and incomplete recovery, such as charging a payment twice, without a hand-written test per failure point.
+FaultSweep tests idempotency in .NET message handlers. It simulates failures at recorded database and broker operations, redelivers and duplicates the message, and checks the final state against a clean delivery.
+
+## Try a lost Kafka event
+
+An order handler saves the order and its inbox entry in PostgreSQL, then publishes `OrderPlaced`. FaultSweep simulates a failure just after `COMMIT`. The next delivery sees the inbox entry and returns successfully. The order is saved, and the event is missing.
+
+```text
+FaultSweep: 5 effects, 10 scenarios, 2 violations.
+StateMismatch
+  produced $[0]: Missing, expected …, actual <missing>
+  #4 postgres:Commit CrashAfter [minimal] — 1/2 attempts succeeded (SimulatedCrashException)
+```
+
+From the repository root, run this with the **.NET 10 SDK** and **Docker running**. Testcontainers starts PostgreSQL, and the demo captures Kafka publications in memory.
+
+```sh
+dotnet test tests/FaultSweep.Postgres.Tests/FaultSweep.Postgres.Tests.csproj --filter "FullyQualifiedName~MessageFlowTests" --logger "console;verbosity=detailed"
+```
+
+The demo prints the missing-event report and checks that the transactional inbox/outbox case passes. [Demo tests](https://github.com/danieloileinik/fault-sweep/blob/main/tests/FaultSweep.Postgres.Tests/MessageFlowTests.cs) · [Example handler](https://github.com/danieloileinik/fault-sweep/blob/main/tests/FaultSweep.Postgres.Tests/PostgresKafkaHandler.cs)
 
 ## Check idempotency in integration tests
 
 Install the PostgreSQL adapter in your test project.
 
 ```sh
-dotnet add package FaultSweep.Postgres --version 1.1.0
+dotnet add package FaultSweep.Postgres
 ```
 
 Use the application host and an isolated PostgreSQL database with migrations and seed data applied.
