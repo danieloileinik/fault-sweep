@@ -11,6 +11,32 @@ namespace FaultSweep.Redis.Tests;
 [Collection(RedisCollection.Name)]
 public sealed class RegressionGenerationTests(RedisFixture fixture)
 {
+    [Theory]
+    [InlineData("Generated", "Orders.Replay", "App.Fixture")]
+    [InlineData("global::Generated", "Replay", "App.Fixture")]
+    [InlineData("Generated", "Replay", "App.class")]
+    public void Rejects_names_that_cannot_appear_in_generated_source(
+        string ns,
+        string name,
+        string fixtureName
+    )
+    {
+        // Arrange
+        var options = new XunitRegressionOptions
+        {
+            Namespace = ns,
+            ClassName = name,
+            FixtureTypeName = fixtureName,
+            CollectionName = "orders",
+        };
+
+        // Act
+        Exception? error = Record.Exception(() => new XunitRegressionGenerator(options));
+
+        // Assert
+        Assert.IsType<ArgumentException>(error);
+    }
+
     [Fact]
     public async Task Generated_test_compiles_fails_for_the_bug_and_passes_after_the_fix()
     {

@@ -7,31 +7,52 @@ namespace FaultSweep.Xunit;
 /// <summary>The existing collection fixture supplies CreateSweep(message), including reset, snapshots and normalizers.</summary>
 public sealed class XunitRegressionGenerator : IRegressionTestGenerator
 {
+    private static readonly HashSet<string> ReservedKeywords = new(
+        """
+        abstract as base bool break byte case catch char checked class const continue decimal default
+        delegate do double else enum event explicit extern false finally fixed float for foreach goto
+        if implicit in int interface internal is lock long namespace new null object operator out override
+        params private protected public readonly ref return sbyte sealed short sizeof stackalloc static
+        string struct switch this throw true try typeof uint ulong unchecked unsafe ushort using virtual
+        void volatile while __arglist __makeref __reftype __refvalue
+        """.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries),
+        StringComparer.Ordinal
+    );
+
     private readonly XunitRegressionOptions options;
 
     public XunitRegressionGenerator(XunitRegressionOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.CollectionName);
-        string[] identifiers = [options.Namespace, options.ClassName, options.FixtureTypeName];
-        foreach (string identifier in identifiers)
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.Namespace);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.FixtureTypeName);
+        if (!IsIdentifier(options.ClassName))
         {
-            if (
-                !Regex.IsMatch(
-                    identifier,
-                    @"^(global::)?[A-Za-z_][A-Za-z_0-9]*(\.[A-Za-z_][A-Za-z_0-9]*)*$"
-                )
-            )
-            {
-                throw new ArgumentException(
-                    "Regression names must be valid qualified C# identifiers.",
-                    nameof(options)
-                );
-            }
+            throw new ArgumentException(
+                "ClassName must be a single C# identifier.",
+                nameof(options)
+            );
+        }
+
+        string fixture = options.FixtureTypeName;
+        if (fixture.StartsWith("global::", StringComparison.Ordinal))
+        {
+            fixture = fixture["global::".Length..];
+        }
+
+        if (
+            !options.Namespace.Split('.').All(IsIdentifier) || !fixture.Split('.').All(IsIdentifier)
+        )
+        {
+            throw new ArgumentException("Invalid namespace or fixture type name.", nameof(options));
         }
 
         this.options = options;
     }
+
+    private static bool IsIdentifier(string value) =>
+        Regex.IsMatch(value, @"\A@?[A-Za-z_][A-Za-z_0-9]*\z") && !ReservedKeywords.Contains(value);
 
     public string Generate(RegressionTestCase testCase)
     {
