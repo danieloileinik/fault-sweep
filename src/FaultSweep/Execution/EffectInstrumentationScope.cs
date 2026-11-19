@@ -27,9 +27,9 @@ internal sealed class EffectInstrumentationScope : IDisposable
 
     public void Dispose() => Dispose(null);
 
-    public void Dispose(Exception? failure)
+    private void Dispose(Exception? failure)
     {
-        IDisposable[] active = scopes.ToArray();
+        var active = scopes.ToArray();
         scopes.Clear();
         List<Exception> failures = [];
         for (int index = active.Length - 1; index >= 0; index--)

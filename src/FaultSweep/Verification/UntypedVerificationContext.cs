@@ -27,7 +27,7 @@ public class VerificationContext
     public IServiceProvider Services { get; }
     public IReadOnlyDictionary<string, StateSnapshot> State { get; }
     /// <summary>The injected fault, or null for baseline and duplicate deliveries. Use IsBaseline to distinguish them.</summary>
-    public FaultScenario? Scenario { get; }
+    private FaultScenario? Scenario { get; }
     public DuplicateDeliveryMode? Duplicates { get; }
     public bool IsBaseline => Scenario is null && Duplicates is null;
     public IReadOnlyList<DeliveryAttempt> Attempts { get; }

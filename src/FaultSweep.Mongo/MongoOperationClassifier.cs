@@ -79,14 +79,14 @@ internal static class MongoOperationClassifier
             );
         }
 
-        if (method.IsSpecialName && method.Name == "get_Cluster")
+        if (method is { IsSpecialName: true, Name: "get_Cluster" })
         {
             return new MongoOperation(
                 Rejection: "Direct MongoDB cluster access cannot be instrumented during delivery."
             );
         }
 
-        if (method.IsSpecialName && method.Name is "get_Indexes" or "get_SearchIndexes")
+        if (method is { IsSpecialName: true, Name: "get_Indexes" or "get_SearchIndexes" })
         {
             return new MongoOperation(
                 Rejection: "MongoDB index management must run during reset or seed, outside the handler."

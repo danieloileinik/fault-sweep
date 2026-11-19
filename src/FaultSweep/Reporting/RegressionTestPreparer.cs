@@ -56,7 +56,7 @@ internal sealed class RegressionTestPreparer<TMessage>(IRegressionTestGenerator?
         TMessage runMessage,
         FaultScenarioResult violation
     ) =>
-        new RegressionTestCase(
+        new(
             SerializeMessage(runMessage),
             CSharpTypeName.Format(typeof(TMessage)),
             new ReplayScenario(

@@ -155,7 +155,7 @@ internal static class TextReport
 
     private static void AppendTrace(StringBuilder report, IEnumerable<EffectTraceEntry> trace)
     {
-        foreach (EffectTraceEntry entry in trace)
+        foreach (var entry in trace)
         {
             string marker = entry.Outcome
                 is EffectOutcome.CrashBefore

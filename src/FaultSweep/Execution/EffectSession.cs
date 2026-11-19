@@ -10,7 +10,7 @@ internal sealed class EffectSession(
     IReadOnlyList<EffectPoint>? expected = null
 )
 {
-    private readonly object gate = new();
+    private readonly Lock gate = new();
     private readonly List<EffectTraceEntry> trace = [];
     private int index;
     private bool active;

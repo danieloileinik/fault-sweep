@@ -17,8 +17,7 @@ internal static class HandlerInvocation<THandler, TMessage>
         MethodInfo[] methods = typeof(THandler)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
             .Where(method =>
-                method.Name == "HandleAsync"
-                && !method.ContainsGenericParameters
+                method is { Name: "HandleAsync", ContainsGenericParameters: false }
                 && (
                     method.ReturnType == typeof(ValueTask)
                     || typeof(Task).IsAssignableFrom(method.ReturnType)

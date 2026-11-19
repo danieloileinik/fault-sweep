@@ -162,7 +162,7 @@ public sealed class VerificationTests
         Assert.Equal("15", baseline.Expected);
         Assert.Equal("10", baseline.Actual);
         Assert.All(result.Scenarios, scenario => Assert.Contains(scenario.Differences,
-            difference => difference.Snapshot == "balance" && difference.Expected == "15"));
+            difference => difference is { Snapshot: "balance", Expected: "15" }));
     }
 
     [Fact]
@@ -284,7 +284,7 @@ public sealed class VerificationTests
         // Assert
         MinimizedScenario minimum = Assert.IsType<MinimizedScenario>(result.MinimalScenario);
         Assert.Equal(1, JsonSerializer.Deserialize<TestMessage>(minimum.MessageJson!)!.Amount);
-        Assert.Contains(minimum.Result.Differences, difference => difference.Snapshot == "balance" && difference.Expected == "1");
+        Assert.Contains(minimum.Result.Differences, difference => difference is { Snapshot: "balance", Expected: "1" });
     }
 
     [Fact]
