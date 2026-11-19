@@ -125,43 +125,44 @@ result.ShouldHaveNoViolations();
 
 ## Reading failures and reproducing
 
-Example failure for a `CompleteStep` handler (runner stack frames omitted):
+The assertion message groups scenarios that report the same violation and show the same details. In this run, both fault scenarios and both duplicate-delivery modes left the counter at `2` instead of `1`.
 
-```
-FaultSweep.Reporting.FaultSweepAssertionException
-FaultSweep: 8 effects, 26 scenarios, 4 violations.
-Minimal scenario: effect #8, CrashAfter, 4 deliveries.
-
-Effect #8 postgres:Commit: CrashAfter
-  Violations: RedeliveryLimitExceeded
-  Attempts: 4; succeeded: 0; failed: 4
-  Exceptions: SimulatedCrashException (1), InvalidOperationException (3)
-
-Effect #8 postgres:Commit: AppliedButFailed
-  Violations: RedeliveryLimitExceeded
-  Attempts: 4; succeeded: 0; failed: 4
-  Exceptions: InvalidOperationException (4)
-
-Duplicate deliveries: Sequential; violations: RedeliveryLimitExceeded
-  Attempts: 5; succeeded: 1; failed: 4
-  Exceptions: InvalidOperationException (4)
-
-Duplicate deliveries: Parallel; violations: RedeliveryLimitExceeded
-  Attempts: 5; succeeded: 1; failed: 4
-  Exceptions: InvalidOperationException (4)
-Minimal duplicate scenario: Sequential
-
-Call ToDetailedString() for SQL, delivery traces and regression tests.
-
-   at FaultSweep.Reporting.FaultSweepResult.ShouldHaveNoViolations()
-   at FaultSweep.FaultSweepBuilder`1.AssertIdempotentAsync[TMessage](TMessage message, CancellationToken cancellationToken)
-   at WorkflowScheduler.Tests.Integration.CompleteStepFaultSweepTests.CompleteStep_IsIdempotent()
+```text
+FaultSweep: 1 effects, 5 scenarios, 4 violations.
+StateMismatch
+  state $.Counter: ValueMismatch, expected 1, actual 2
+  #1 postgres:Command CrashAfter [minimal] — 1/2 attempts succeeded (SimulatedCrashException)
+  #1 postgres:Command AppliedButFailed — 1/2 attempts succeeded (AppliedButFailedException)
+  Duplicate Sequential [minimal], Duplicate Parallel — 2/2 attempts succeeded
+Full report: ToDetailedString()
 ```
 
-`RedeliveryLimitExceeded` means the operation did not recover within the allowed attempts; it does not by itself prove a state mismatch. Here the repeated `InvalidOperationException` is the lead to follow, and `ToDetailedString()` shows its message.
+Each group shows up to three state differences and three failed invariants, with values and messages shortened to 100 characters. The `[minimal]` marker identifies the scenario selected for reproduction.
 
-- **Compact report** (`ToString()`, assertion message): effect and fault, violation kinds, attempt counts, exception types with counts, state differences, invariant failures. SQL, delivery traces, payloads and generated tests are omitted.
-- **`result.ToDetailedString()`** adds the baseline trace, SQL targets, each violating scenario's deliveries and exception messages, minimization details and regression source. It reads the captured result and reruns nothing. After a failed assertion, call it on the caught `FaultSweepAssertionException` (also available as its `Result`).
+Call `ToDetailedString()` on the result or on the caught `FaultSweepAssertionException` to inspect individual deliveries without rerunning the sweep. This excerpt shows the clean run and the first failing scenario.
+
+```text
+FaultSweep: 1 effects, 5 scenarios, 4 violations.
+Clean baseline trace:
+    - #1 postgres:Command (UPDATE accounts SET balance = balance - 1): Succeeded
+Minimal scenario: effect #1, CrashAfter, 2 deliveries.
+  Message: {"Amount":10}
+  Candidates: 0; budget exhausted: False
+
+Effect #1 postgres:Command (UPDATE accounts SET balance = balance - 1): CrashAfter
+  Violations: StateMismatch
+  Attempts: 2; succeeded: 1; failed: 1
+  Delivery 1: SimulatedCrashException: Simulated CrashAfter at effect #1: postgres:Command (UPDATE accounts SET balance = balance - 1).
+    ! #1 postgres:Command (UPDATE accounts SET balance = balance - 1): CrashAfter
+  Delivery 2: success
+    - #1 postgres:Command (UPDATE accounts SET balance = balance - 1): Succeeded
+  state $.Counter: ValueMismatch
+    expected: 1
+    actual:   2
+```
+
+The full report also includes any generated regression tests. For a `RedeliveryLimitExceeded` violation, look at the final failed attempt to see why recovery stopped.
+
 - **`MinimalScenario` / `MinimalDuplicateScenario`** identify the earliest failing fault and a failing duplicate mode.
 - **`ReplayScenario(new ReplayScenario(index, kind))`** reruns one fault; pass `ExpectedEffect` to detect a changed trace. **`ReplayDuplicates(mode)`** reruns one duplicate mode; keep any test barriers. Both still run a baseline and skip all other scenarios.
 - **`MinimizeMessageWith(shrink, complexity)`** searches for a smaller failing message within `MaxMinimizationRuns`, skipping invalid baselines.

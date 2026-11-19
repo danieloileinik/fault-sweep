@@ -18,13 +18,13 @@ public sealed class ReportTests
         string report = result.ToString();
 
         // Assert
-        Assert.Contains("Effect #1 postgres:Command: CrashAfter", report);
-        Assert.Contains("Attempts: 2; succeeded: 1; failed: 1", report);
-        Assert.Contains("SimulatedCrashException (1)", report);
-        Assert.Contains("AppliedButFailedException (1)", report);
+        Assert.Contains("#1 postgres:Command CrashAfter", report);
+        Assert.Contains("1/2 attempts succeeded", report);
+        Assert.Contains("SimulatedCrashException", report);
+        Assert.Contains("AppliedButFailedException", report);
         Assert.Contains("state $.Counter: ValueMismatch", report);
-        Assert.Contains("expected: 1", report);
-        Assert.Contains("actual:   2", report);
+        Assert.Contains("expected 1", report);
+        Assert.Contains("actual 2", report);
         Assert.DoesNotContain(Sql, report);
         Assert.DoesNotContain("Delivery 1:", report);
         Assert.DoesNotContain("Message:", report);
@@ -89,9 +89,13 @@ public sealed class ReportTests
 
         // Assert
         Assert.Equal(2, result.DuplicateViolations.Count);
-        Assert.Contains("Duplicate deliveries: Sequential", report);
-        Assert.Contains("Duplicate deliveries: Parallel", report);
-        Assert.Contains("Attempts: 2; succeeded: 2; failed: 0", report);
+        Assert.Single(
+            report.Split(Environment.NewLine), line => line.Contains("state $.Counter")
+        );
+        Assert.Contains("CrashAfter [minimal]", report);
+        Assert.Contains("Duplicate Sequential", report);
+        Assert.Contains("Duplicate Parallel", report);
+        Assert.Contains("2/2 attempts succeeded", report);
         Assert.DoesNotContain(Sql, report);
         Assert.DoesNotContain("Delivery 1:", report);
         Assert.Contains("Delivery 2:", result.ToDetailedString());
@@ -118,10 +122,46 @@ public sealed class ReportTests
         FaultSweepResult result = await environment.CreateSweep().RunAsync();
 
         // Assert
-        Assert.Contains("Attempts: 4; succeeded: 0; failed: 4", result.ToString());
-        Assert.Contains("InvalidOperationException (3)", result.ToString());
+        Assert.Contains("0/4 attempts succeeded", result.ToString());
+        Assert.Contains("InvalidOperationException ×3", result.ToString());
         Assert.DoesNotContain(Sql, result.ToString());
         Assert.Contains($"InvalidOperationException: {Sql}", result.ToDetailedString());
+    }
+
+    [Fact]
+    public async Task Large_baseline_failures_show_preview_counts_and_keep_full_details()
+    {
+        // Arrange
+        using var environment = new SweepTestEnvironment(CreateBehavior());
+        string payload = new string('x', 200) + "payload-end";
+        var sweep = environment
+            .CreateSweep()
+            .TrackState(
+                "payload",
+                (_, _) =>
+                    ValueTask.FromResult(
+                        Snapshots.StateSnapshot.From(Enumerable.Repeat(payload, 5).ToArray())
+                    )
+            )
+            .ExpectState("payload", Snapshots.StateSnapshot.From(Array.Empty<string>()));
+        for (int i = 1; i <= 5; i++)
+        {
+            sweep.CheckInvariant($"rule {i}", _ => false);
+        }
+
+        // Act
+        FaultSweepResult result = await sweep.RunAsync();
+        string report = result.ToString();
+        string detailed = result.ToDetailedString();
+
+        // Assert
+        Assert.Contains("+2 more differences", report);
+        Assert.Contains("+2 more invariants", report);
+        Assert.Contains("…", report);
+        Assert.DoesNotContain("payload-end", report);
+        Assert.DoesNotContain("rule 5", report);
+        Assert.Contains("payload-end", detailed);
+        Assert.Contains("rule 5", detailed);
     }
 
     [Fact]

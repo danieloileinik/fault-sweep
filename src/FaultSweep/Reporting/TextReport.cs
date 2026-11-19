@@ -14,21 +14,25 @@ internal static class TextReport
             result.Violations.Count
             + result.DuplicateViolations.Count
             + (result.BaselineVerification.HasViolations ? 1 : 0);
+        int scenarios = result.Scenarios.Count + result.DuplicateScenarios.Count;
         report.AppendLine(
-            $"FaultSweep: {result.BaselineTrace.Count} effects, {result.Scenarios.Count + result.DuplicateScenarios.Count} scenarios, {violations} violations."
+            $"FaultSweep: {result.BaselineTrace.Count} effects, {scenarios} scenarios, {violations} violations."
         );
-        if (detailed)
+        if (!detailed)
         {
-            report.AppendLine("Clean baseline trace:");
-            AppendTrace(report, result.BaselineTrace);
+            CompactReport.Append(report, result);
+            return report.ToString();
         }
+
+        report.AppendLine("Clean baseline trace:");
+        AppendTrace(report, result.BaselineTrace);
 
         if (result.BaselineVerification.HasViolations)
         {
             report.AppendLine();
             report.AppendLine("Clean baseline verification failed:");
             AppendVerification(report, result.BaselineVerification);
-            if (detailed && result.BaselineRegressionTest is { } baselineTest)
+            if (result.BaselineRegressionTest is { } baselineTest)
             {
                 report.AppendLine("  xUnit regression test:");
                 report.AppendLine(baselineTest);
@@ -39,35 +43,32 @@ internal static class TextReport
             report.AppendLine(
                 $"Minimal scenario: effect #{minimal.Result.Scenario.Point.Index}, {minimal.Result.Scenario.Kind}, {minimal.Result.Attempts.Count} deliveries."
             );
-            if (detailed)
-            {
-                report.AppendLine(
-                    $"  Message: {minimal.MessageJson ?? "<custom serialization required>"}"
-                );
-                report.AppendLine(
-                    $"  Candidates: {minimal.EvaluatedCandidates}; budget exhausted: {minimal.BudgetExhausted}"
-                );
-            }
+            report.AppendLine(
+                $"  Message: {minimal.MessageJson ?? "<custom serialization required>"}"
+            );
+            report.AppendLine(
+                $"  Candidates: {minimal.EvaluatedCandidates}; budget exhausted: {minimal.BudgetExhausted}"
+            );
         }
         foreach (FaultScenarioResult violation in result.Violations)
         {
             FaultScenario scenario = violation.Scenario;
             report.AppendLine();
             report.AppendLine(
-                $"Effect #{scenario.Point.Index} {Describe(scenario.Point.Effect, detailed)}: {scenario.Kind}"
+                $"Effect #{scenario.Point.Index} {scenario.Point.Effect}: {scenario.Kind}"
             );
             report.AppendLine($"  Violations: {violation.Violations}");
-            AppendAttempts(report, violation.Attempts, violation.Trace, detailed);
+            AppendAttempts(report, violation.Attempts, violation.Trace);
 
             AppendVerification(report, violation.Verification);
-            if (detailed && violation.RegressionTest is { } source)
+            if (violation.RegressionTest is { } source)
             {
                 report.AppendLine("  xUnit regression test:");
                 report.AppendLine(source);
             }
         }
 
-        if (detailed && result.MinimalScenario?.Result.RegressionTest is { } regression)
+        if (result.MinimalScenario?.Result.RegressionTest is { } regression)
         {
             report.AppendLine();
             report.AppendLine("Generated xUnit regression test:");
@@ -79,10 +80,10 @@ internal static class TextReport
             report.AppendLine(
                 $"Duplicate deliveries: {duplicate.Mode}; violations: {duplicate.Violations}"
             );
-            AppendAttempts(report, duplicate.Attempts, duplicate.Trace, detailed);
+            AppendAttempts(report, duplicate.Attempts, duplicate.Trace);
 
             AppendVerification(report, duplicate.Verification);
-            if (detailed && duplicate.RegressionTest is { } source)
+            if (duplicate.RegressionTest is { } source)
             {
                 report.AppendLine(source);
             }
@@ -91,58 +92,28 @@ internal static class TextReport
         if (result.MinimalDuplicateScenario is { } minimumDuplicate)
         {
             report.AppendLine($"Minimal duplicate scenario: {minimumDuplicate.Result.Mode}");
-            if (detailed)
-            {
-                report.AppendLine($"  Message: {minimumDuplicate.MessageJson}");
-                report.AppendLine(
-                    $"  Candidates: {minimumDuplicate.EvaluatedCandidates}; budget exhausted: {minimumDuplicate.BudgetExhausted}"
-                );
-                if (minimumDuplicate.Result.RegressionTest is { } source)
-                {
-                    report.AppendLine(source);
-                }
-            }
-        }
-
-        if (!detailed && violations > 0)
-        {
-            report.AppendLine();
+            report.AppendLine($"  Message: {minimumDuplicate.MessageJson}");
             report.AppendLine(
-                "Call ToDetailedString() for SQL, delivery traces and regression tests."
+                $"  Candidates: {minimumDuplicate.EvaluatedCandidates}; budget exhausted: {minimumDuplicate.BudgetExhausted}"
             );
+            if (minimumDuplicate.Result.RegressionTest is { } source)
+            {
+                report.AppendLine(source);
+            }
         }
 
         return report.ToString();
     }
 
-    private static string Describe(EffectDescriptor effect, bool detailed) =>
-        detailed ? effect.ToString() : $"{effect.Source}:{effect.Operation}";
-
     private static void AppendAttempts(
         StringBuilder report,
         IReadOnlyList<DeliveryAttempt> attempts,
-        IReadOnlyList<EffectTraceEntry> trace,
-        bool detailed
+        IReadOnlyList<EffectTraceEntry> trace
     )
     {
         report.AppendLine(
             $"  Attempts: {attempts.Count}; succeeded: {attempts.Count(attempt => attempt.Succeeded)}; failed: {attempts.Count(attempt => !attempt.Succeeded)}"
         );
-        if (!detailed)
-        {
-            string[] errors = attempts
-                .Where(attempt => attempt.Error is not null)
-                .GroupBy(attempt => attempt.Error!.GetType())
-                .Select(group => $"{group.Key.Name} ({group.Count()})")
-                .ToArray();
-            if (errors.Length > 0)
-            {
-                report.AppendLine($"  Exceptions: {string.Join(", ", errors)}");
-            }
-
-            return;
-        }
-
         foreach (DeliveryAttempt attempt in attempts)
         {
             string status = attempt.Succeeded
