@@ -51,7 +51,9 @@ internal sealed record SweepPlan<TMessage>(
 
         return this with
         {
-            Snapshots = Array.AsReadOnly(Snapshots.ToArray()),
+            Snapshots = Array.AsReadOnly(
+                Snapshots.OrderBy(snapshot => snapshot.Name, StringComparer.Ordinal).ToArray()
+            ),
             Invariants = Array.AsReadOnly(Invariants.ToArray()),
             ExpectedStates = new System.Collections.ObjectModel.ReadOnlyDictionary<
                 string,

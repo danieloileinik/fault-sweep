@@ -31,12 +31,7 @@ internal sealed class SweepState(
     {
         var state = new SortedDictionary<string, StateSnapshot>(StringComparer.Ordinal);
         await using AsyncServiceScope scope = services.CreateAsyncScope();
-        foreach (
-            SnapshotRegistration snapshot in snapshots.OrderBy(
-                snapshot => snapshot.Name,
-                StringComparer.Ordinal
-            )
-        )
+        foreach (SnapshotRegistration snapshot in snapshots)
         {
             cancellationToken.ThrowIfCancellationRequested();
             StateSnapshot captured = await snapshot

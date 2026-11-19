@@ -24,12 +24,7 @@ internal sealed class SweepVerifier<TMessage>(
     {
         cancellationToken.ThrowIfCancellationRequested();
         List<SnapshotDifference> differences = [];
-        foreach (
-            SnapshotRegistration snapshot in snapshots.OrderBy(
-                snapshot => snapshot.Name,
-                StringComparer.Ordinal
-            )
-        )
+        foreach (SnapshotRegistration snapshot in snapshots)
         {
             StateSnapshot? reference =
                 expected.GetValueOrDefault(snapshot.Name)
