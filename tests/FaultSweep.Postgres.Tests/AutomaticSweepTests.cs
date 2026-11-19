@@ -530,6 +530,31 @@ public sealed class AutomaticSweepTests(PostgresFixture postgres)
         await AssertRestoredAsync(database);
     }
 
+    [Fact]
+    public async Task Rejects_cached_sequences_before_resetting_data()
+    {
+        // Arrange
+        await using TestDatabase database = await postgres.CreateDatabaseAsync();
+        await InitializeAsync(database);
+        await database.ExecuteAsync("ALTER SEQUENCE outbox_id_seq CACHE 10");
+        var services = new ServiceCollection();
+        services.AddSingleton(database);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+
+        // Act
+        var error = await Assert.ThrowsAsync<FaultSweepExecutionException>(() =>
+            FaultSweep
+                .For<AutomaticOrderHandler>(provider)
+                .WithPostgres(database.ConnectionString)
+                .CheckIdempotencyAsync(new AutomaticOrder())
+        );
+
+        // Assert
+        Assert.Contains("CACHE 1", error.Message);
+        Assert.Contains("outbox_id_seq", error.Message);
+        await AssertRestoredAsync(database);
+    }
+
     private static Task InitializeAsync(TestDatabase database) =>
         database.ExecuteAsync(
             """

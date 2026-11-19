@@ -282,7 +282,8 @@ internal sealed class PostgresSchemaReader(NpgsqlConnection connection, string s
         await using (
             var command = new NpgsqlCommand(
                 """
-                SELECT c.relname FROM pg_catalog.pg_class c
+                SELECT c.relname, s.seqcache FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_sequence s ON s.seqrelid = c.oid
                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                 WHERE n.nspname = @schema AND c.relkind = 'S' ORDER BY c.relname
                 """,
@@ -297,7 +298,15 @@ internal sealed class PostgresSchemaReader(NpgsqlConnection connection, string s
                 .ConfigureAwait(false);
             while (await reader.ReadAsync(token).ConfigureAwait(false))
             {
-                sequenceNames.Add(reader.GetString(0));
+                string name = reader.GetString(0);
+                if (reader.GetInt64(1) > 1)
+                {
+                    throw new FaultSweepExecutionException(
+                        $"Automatic PostgreSQL restoration requires CACHE 1 for sequence {Qualified(name)}."
+                    );
+                }
+
+                sequenceNames.Add(name);
             }
         }
 
