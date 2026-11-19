@@ -315,6 +315,54 @@ public sealed class AutomaticSweepTests(PostgresFixture postgres)
         Assert.Equal(1, await command.ExecuteScalarAsync());
     }
 
+    [Fact]
+    public async Task Preserves_trigger_modes_on_individual_partitions()
+    {
+        // Arrange
+        await using TestDatabase database = await postgres.CreateDatabaseAsync();
+        await InitializeAsync(database);
+        await database.ExecuteAsync(
+            """
+            CREATE SCHEMA archive_data;
+            CREATE TABLE archive (id int PRIMARY KEY, value int) PARTITION BY LIST (id);
+            CREATE TABLE archive_one PARTITION OF archive FOR VALUES IN (1);
+            CREATE TABLE archive_data.archive_two PARTITION OF archive FOR VALUES IN (2);
+            INSERT INTO archive VALUES (1, 10), (2, 20);
+            CREATE FUNCTION bump_archive() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN NEW.value := NEW.value + 1; RETURN NEW; END; $$;
+            CREATE TRIGGER bump BEFORE INSERT ON archive FOR EACH ROW EXECUTE FUNCTION bump_archive();
+            ALTER TABLE ONLY archive_one DISABLE TRIGGER bump;
+            ALTER TABLE ONLY archive_data.archive_two ENABLE ALWAYS TRIGGER bump;
+            """
+        );
+        var services = new ServiceCollection();
+        services.AddSingleton(database);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+
+        // Act
+        FaultSweepResult result = await FaultSweep
+            .For<AutomaticOrderHandler>(provider)
+            .WithPostgres(database.ConnectionString, ignore: ["outbox.id", "outbox.created_at"])
+            .CheckIdempotencyAsync(new AutomaticOrder());
+
+        // Assert
+        result.ShouldHaveNoViolations();
+        var archive = result.BaselineState["postgres"].Value.GetProperty("archive");
+        Assert.Equal(20, archive[1].GetProperty("value").GetInt32());
+
+        await using var connection = new NpgsqlConnection(database.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT string_agg(tgenabled::text, ',' ORDER BY c.relname)
+            FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE t.tgname = 'bump'
+            """,
+            connection
+        );
+        Assert.Equal("O,D,A", await command.ExecuteScalarAsync());
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

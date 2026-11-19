@@ -27,7 +27,7 @@ internal sealed class PostgresBackupStore(NpgsqlConnection connection, PostgresR
         foreach (PostgresTriggerBackup trigger in plan.Triggers)
         {
             await ExecuteAsync(
-                    $"ALTER TABLE {Qualified(trigger.Table)} DISABLE TRIGGER {Quote(trigger.Name)}",
+                    $"ALTER TABLE ONLY {PostgresSql.Qualified(trigger.Schema, trigger.Table)} DISABLE TRIGGER {Quote(trigger.Name)}",
                     transaction,
                     cancellationToken
                 )
@@ -75,7 +75,7 @@ internal sealed class PostgresBackupStore(NpgsqlConnection connection, PostgresR
                 _ => "ENABLE",
             };
             await ExecuteAsync(
-                    $"ALTER TABLE {Qualified(trigger.Table)} {mode} TRIGGER {Quote(trigger.Name)}",
+                    $"ALTER TABLE ONLY {PostgresSql.Qualified(trigger.Schema, trigger.Table)} {mode} TRIGGER {Quote(trigger.Name)}",
                     transaction,
                     cancellationToken
                 )

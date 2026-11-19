@@ -179,10 +179,19 @@ internal sealed class PostgresSchemaReader(NpgsqlConnection connection, string s
         List<PostgresTriggerBackup> triggers = [];
         await using var command = new NpgsqlCommand(
             """
-            SELECT c.relname, t.tgname, t.tgenabled::text FROM pg_catalog.pg_trigger t
+            WITH RECURSIVE tracked(oid) AS (
+                SELECT c.oid FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = @schema AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+                UNION ALL
+                SELECT h.inhrelid FROM pg_catalog.pg_inherits h
+                JOIN tracked parent ON parent.oid = h.inhparent
+            )
+            SELECT n.nspname, c.relname, t.tgname, t.tgenabled::text
+            FROM tracked JOIN pg_catalog.pg_trigger t ON t.tgrelid = tracked.oid
             JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = @schema AND NOT t.tgisinternal AND t.tgenabled <> 'D'
+            WHERE NOT t.tgisinternal AND t.tgenabled <> 'D'
             """,
             connection,
             transaction
@@ -197,7 +206,8 @@ internal sealed class PostgresSchemaReader(NpgsqlConnection connection, string s
                 new PostgresTriggerBackup(
                     reader.GetString(0),
                     reader.GetString(1),
-                    reader.GetString(2)
+                    reader.GetString(2),
+                    reader.GetString(3)
                 )
             );
         }
