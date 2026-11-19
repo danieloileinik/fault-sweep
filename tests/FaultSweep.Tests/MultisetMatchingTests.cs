@@ -78,6 +78,38 @@ public sealed class MultisetMatchingTests
         result.ShouldHaveNoViolations();
     }
 
+    [Theory]
+    [InlineData(ArrayComparison.Set)]
+    [InlineData(ArrayComparison.Multiset)]
+    public async Task Stops_comparing_candidate_fields_after_the_first_mismatch(
+        ArrayComparison mode
+    )
+    {
+        // Arrange
+        var expected = StateSnapshot.FromJson("""[{"a":1,"b":0}]""");
+        var actual = StateSnapshot.FromJson("""[{"a":2,"b":0}]""");
+        int calls = 0;
+        var options = new SnapshotComparisonOptions
+        {
+            ArrayComparison = mode,
+            Comparers = new Dictionary<string, Func<JsonElement, JsonElement, bool>>
+            {
+                ["$[0].b"] = (_, _) =>
+                {
+                    calls++;
+                    return true;
+                },
+            },
+        };
+
+        // Act
+        FaultSweepResult result = await CompareAsync(expected, actual, options);
+
+        // Assert
+        Assert.True(result.HasViolations);
+        Assert.Equal(0, calls);
+    }
+
     private static bool WithinTolerance(JsonElement left, JsonElement right) =>
         Math.Abs(left.GetInt32() - right.GetInt32()) <= 1;
 

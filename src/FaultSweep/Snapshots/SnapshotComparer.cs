@@ -58,239 +58,160 @@ internal sealed class SnapshotComparer
         string name,
         StateSnapshot expected,
         StateSnapshot actual
-    )
-    {
-        List<SnapshotDifference> differences = [];
-        CompareValue(name, "$", expected.Value, actual.Value, differences);
-        return differences.AsReadOnly();
-    }
+    ) =>
+        Array.AsReadOnly(
+            FindDifferences("$", expected.Value, actual.Value)
+                .Select(difference => difference.Format(name))
+                .ToArray()
+        );
 
-    private void CompareValue(
-        string name,
+    private IEnumerable<JsonDifference> FindDifferences(
         string path,
         JsonElement expected,
-        JsonElement actual,
-        List<SnapshotDifference> differences
+        JsonElement actual
     )
     {
-        if (comparers.TryGetValue(path, out Func<JsonElement, JsonElement, bool>? comparer))
+        if (comparers.TryGetValue(path, out var comparer))
         {
-            if (!comparer(expected, actual))
+            return comparer(expected, actual) ? [] : [new JsonDifference(path, expected, actual)];
+        }
+
+        if (expected.ValueKind == actual.ValueKind)
+        {
+            switch (expected.ValueKind)
             {
-                AddMismatch();
+                case JsonValueKind.Object:
+                    return CompareObjects(path, expected, actual);
+                case JsonValueKind.Array:
+                    return CompareArrays(path, expected, actual);
+                default:
+                    if (JsonElement.DeepEquals(expected, actual))
+                    {
+                        return [];
+                    }
+                    break;
             }
-
-            return;
         }
 
-        if (expected.ValueKind != actual.ValueKind)
-        {
-            AddMismatch();
-            return;
-        }
-
-        switch (expected.ValueKind)
-        {
-            case JsonValueKind.Object:
-                CompareObjects(name, path, expected, actual, differences);
-                break;
-            case JsonValueKind.Array:
-                CompareArrays(name, path, expected, actual, differences);
-                break;
-            default:
-                if (!JsonElement.DeepEquals(expected, actual))
-                {
-                    AddMismatch();
-                }
-
-                break;
-        }
-
-        void AddMismatch() =>
-            differences.Add(
-                new SnapshotDifference(
-                    name,
-                    path,
-                    DifferenceKind.ValueMismatch,
-                    StateSnapshot.Format(expected),
-                    StateSnapshot.Format(actual)
-                )
-            );
+        return [new JsonDifference(path, expected, actual)];
     }
 
-    private void CompareObjects(
-        string name,
+    private IEnumerable<JsonDifference> CompareObjects(
         string path,
         JsonElement expected,
-        JsonElement actual,
-        List<SnapshotDifference> differences
+        JsonElement actual
     )
     {
-        string[] names = expected
+        var names = expected
             .EnumerateObject()
             .Select(property => property.Name)
-            .Concat(actual.EnumerateObject().Select(property => property.Name))
+            .Union(
+                actual.EnumerateObject().Select(property => property.Name),
+                StringComparer.Ordinal
+            )
             .Where(property => !ignoredProperties.Contains(property))
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
+            .Order(StringComparer.Ordinal);
 
         foreach (string property in names)
         {
             string propertyPath = PropertyPath(path, property);
-            bool hasExpected = expected.TryGetProperty(property, out JsonElement expectedValue);
-            bool hasActual = actual.TryGetProperty(property, out JsonElement actualValue);
-            if (!hasExpected)
+            bool hasExpected = expected.TryGetProperty(property, out JsonElement left);
+            bool hasActual = actual.TryGetProperty(property, out JsonElement right);
+            if (!hasExpected || !hasActual)
             {
-                differences.Add(
-                    new SnapshotDifference(
-                        name,
-                        propertyPath,
-                        DifferenceKind.Unexpected,
-                        null,
-                        StateSnapshot.Format(actualValue)
-                    )
-                );
-            }
-            else if (!hasActual)
-            {
-                differences.Add(
-                    new SnapshotDifference(
-                        name,
-                        propertyPath,
-                        DifferenceKind.Missing,
-                        StateSnapshot.Format(expectedValue),
-                        null
-                    )
-                );
-            }
-            else
-            {
-                CompareValue(name, propertyPath, expectedValue, actualValue, differences);
-            }
-        }
-    }
-
-    private void CompareArrays(
-        string name,
-        string path,
-        JsonElement expected,
-        JsonElement actual,
-        List<SnapshotDifference> differences
-    )
-    {
-        ArrayComparison mode = arrayComparisons.GetValueOrDefault(
-            path,
-            path == "$" ? arrayComparison : ArrayComparison.Sequence
-        );
-        JsonElement[] expectedItems = expected.EnumerateArray().ToArray();
-        JsonElement[] actualItems = actual.EnumerateArray().ToArray();
-        if (mode == ArrayComparison.Sequence)
-        {
-            for (int index = 0; index < Math.Max(expectedItems.Length, actualItems.Length); index++)
-            {
-                string itemPath = $"{path}[{index}]";
-                if (index >= actualItems.Length)
-                {
-                    differences.Add(
-                        new SnapshotDifference(
-                            name,
-                            itemPath,
-                            DifferenceKind.Missing,
-                            StateSnapshot.Format(expectedItems[index]),
-                            null
-                        )
-                    );
-                }
-                else if (index >= expectedItems.Length)
-                {
-                    differences.Add(
-                        new SnapshotDifference(
-                            name,
-                            itemPath,
-                            DifferenceKind.Unexpected,
-                            null,
-                            StateSnapshot.Format(actualItems[index])
-                        )
-                    );
-                }
-                else
-                {
-                    CompareValue(
-                        name,
-                        itemPath,
-                        expectedItems[index],
-                        actualItems[index],
-                        differences
-                    );
-                }
-            }
-
-            return;
-        }
-
-        if (mode == ArrayComparison.Multiset)
-        {
-            CompareMultiset(name, path, expectedItems, actualItems, differences);
-            return;
-        }
-
-        for (int index = 0; index < expectedItems.Length; index++)
-        {
-            if (
-                expectedItems
-                    .Take(index)
-                    .Any(item => Equal($"{path}[{index}]", item, expectedItems[index]))
-            )
-            {
+                yield return new JsonDifference(propertyPath, left, right);
                 continue;
             }
 
-            if (!actualItems.Any(item => Equal($"{path}[{index}]", expectedItems[index], item)))
+            foreach (var difference in FindDifferences(propertyPath, left, right))
             {
-                differences.Add(
-                    new SnapshotDifference(
-                        name,
-                        $"{path}[{index}]",
-                        DifferenceKind.Missing,
-                        StateSnapshot.Format(expectedItems[index]),
-                        null
-                    )
-                );
-            }
-        }
-
-        for (int index = 0; index < actualItems.Length; index++)
-        {
-            bool present = expectedItems.Any(item =>
-                Equal($"{path}[{index}]", item, actualItems[index])
-            );
-            if (
-                !present
-                && !actualItems
-                    .Take(index)
-                    .Any(item => Equal($"{path}[{index}]", item, actualItems[index]))
-            )
-            {
-                differences.Add(
-                    new SnapshotDifference(
-                        name,
-                        $"{path}[+{index}]",
-                        DifferenceKind.Unexpected,
-                        null,
-                        StateSnapshot.Format(actualItems[index])
-                    )
-                );
+                yield return difference;
             }
         }
     }
 
-    private void CompareMultiset(
-        string name,
+    private IEnumerable<JsonDifference> CompareArrays(
+        string path,
+        JsonElement expected,
+        JsonElement actual
+    )
+    {
+        var mode = arrayComparisons.GetValueOrDefault(
+            path,
+            path == "$" ? arrayComparison : ArrayComparison.Sequence
+        );
+        JsonElement[] left = [.. expected.EnumerateArray()];
+        JsonElement[] right = [.. actual.EnumerateArray()];
+        return mode switch
+        {
+            ArrayComparison.Set => CompareSet(path, left, right),
+            ArrayComparison.Multiset => CompareMultiset(path, left, right),
+            _ => CompareSequence(path, left, right),
+        };
+    }
+
+    private IEnumerable<JsonDifference> CompareSequence(
+        string path,
+        JsonElement[] left,
+        JsonElement[] right
+    )
+    {
+        for (int i = 0; i < Math.Max(left.Length, right.Length); i++)
+        {
+            string itemPath = $"{path}[{i}]";
+            if (i >= right.Length)
+            {
+                yield return new JsonDifference(itemPath, left[i], default);
+            }
+            else if (i >= left.Length)
+            {
+                yield return new JsonDifference(itemPath, default, right[i]);
+            }
+            else
+            {
+                foreach (var difference in FindDifferences(itemPath, left[i], right[i]))
+                {
+                    yield return difference;
+                }
+            }
+        }
+    }
+
+    private IEnumerable<JsonDifference> CompareSet(
+        string path,
+        JsonElement[] left,
+        JsonElement[] right
+    )
+    {
+        for (int i = 0; i < left.Length; i++)
+        {
+            string itemPath = $"{path}[{i}]";
+            if (
+                !left.Take(i).Any(item => Equal(itemPath, item, left[i]))
+                && !right.Any(item => Equal(itemPath, left[i], item))
+            )
+            {
+                yield return new JsonDifference(itemPath, left[i], default);
+            }
+        }
+
+        for (int i = 0; i < right.Length; i++)
+        {
+            string itemPath = $"{path}[{i}]";
+            if (
+                !left.Any(item => Equal(itemPath, item, right[i]))
+                && !right.Take(i).Any(item => Equal(itemPath, item, right[i]))
+            )
+            {
+                yield return new JsonDifference($"{path}[+{i}]", default, right[i]);
+            }
+        }
+    }
+
+    private IEnumerable<JsonDifference> CompareMultiset(
         string path,
         JsonElement[] expectedItems,
-        JsonElement[] actualItems,
-        List<SnapshotDifference> differences
+        JsonElement[] actualItems
     )
     {
         int[] actualByExpected = Enumerable.Repeat(-1, expectedItems.Length).ToArray();
@@ -299,15 +220,7 @@ internal sealed class SnapshotComparer
         {
             if (!TryMatch(index))
             {
-                differences.Add(
-                    new SnapshotDifference(
-                        name,
-                        $"{path}[{index}]",
-                        DifferenceKind.Missing,
-                        StateSnapshot.Format(expectedItems[index]),
-                        null
-                    )
-                );
+                yield return new JsonDifference($"{path}[{index}]", expectedItems[index], default);
             }
         }
 
@@ -315,15 +228,7 @@ internal sealed class SnapshotComparer
         {
             if (expectedByActual[index] < 0)
             {
-                differences.Add(
-                    new SnapshotDifference(
-                        name,
-                        $"{path}[+{index}]",
-                        DifferenceKind.Unexpected,
-                        null,
-                        StateSnapshot.Format(actualItems[index])
-                    )
-                );
+                yield return new JsonDifference($"{path}[+{index}]", default, actualItems[index]);
             }
         }
 
@@ -392,12 +297,8 @@ internal sealed class SnapshotComparer
         }
     }
 
-    private bool Equal(string path, JsonElement expected, JsonElement actual)
-    {
-        List<SnapshotDifference> differences = [];
-        CompareValue(string.Empty, path, expected, actual, differences);
-        return differences.Count == 0;
-    }
+    private bool Equal(string path, JsonElement expected, JsonElement actual) =>
+        !FindDifferences(path, expected, actual).Any();
 
     private static string PropertyPath(string path, string name)
     {
