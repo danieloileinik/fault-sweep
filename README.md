@@ -19,9 +19,6 @@ var message = new CreateOrderCommand(OrderId: Guid.NewGuid(), CustomerId: 42);
 
 await Sweep.For<CreateOrderHandler>(factory.Services)
     .WithPostgres(postgres.GetConnectionString())
-    .CheckInvariant("one order for this request", context =>
-        context.State["postgres"].Value.GetProperty("orders").EnumerateArray()
-            .Count(row => row.GetProperty("id").GetGuid() == message.OrderId) == 1)
     .AssertIdempotentAsync(message);
 ```
 
@@ -54,17 +51,29 @@ The assertion groups scenarios with matching evidence. Call `ToDetailedString()`
 
 When retries run out, inspect the last failed attempt for the application exception. If the target fault was never injected, compare the first attempt with the clean trace. If the clean run records zero operations, check the handler and its adapter registration.
 
-## What gets tested
+## How a scenario runs
 
-The clean run records supported operations in order. Each fault scenario injects one failure at one recorded operation during the first delivery. Retries keep the partially modified state and stop when the handler returns successfully or exhausts its allowance (default **3 retries**). FaultSweep then compares snapshots and evaluates invariants. Each enabled duplicate scenario delivers two copies of the same message, sequentially or in parallel, from fresh seed data.
+1. **Record a clean delivery.** In the demo the trace is `#1` read inbox → `#2` insert order → `#3` insert inbox entry → `#4` commit → `#5` publish. Each occurrence counts, even for identical SQL. The trace includes operations during delivery scope disposal. Setup, reset, snapshot and invariant queries run outside the trace.
+2. **Restore the seed and inject one fault.** In the `CrashAfter` scenario at `#4`, PostgreSQL commits before FaultSweep interrupts the handler. The order and inbox entry survive.
+3. **Redeliver and verify.** Each retry gets a fresh DI scope and keeps the previous attempt's store state. In the demo the handler reads the inbox and returns before publishing. Retries stop on success or after the retry limit (default **3 retries**). FaultSweep compares the final snapshots and checks the invariants.
 
 | Fault | What the handler experiences |
 |---|---|
 | `CrashBefore` | FaultSweep interrupts the delivery before the operation runs. |
 | `CrashAfter` | The operation completes, then FaultSweep interrupts the delivery. |
-| `AppliedButFailed` | The operation completes, but the caller receives a recoverable timeout. |
+| `AppliedButFailed` | The operation completes, then the caller receives `AppliedButFailedException`, a recoverable `TimeoutException`. |
 
-A simulated crash stops further effects in that delivery. Scope disposal and `finally` still run, so an open transaction can roll back. Coverage follows the clean trace, the configured checks and the concurrent schedules actually exercised. Keep IDs, clocks, seed data and background work deterministic. `MaxEffects` defaults to 20 operations per delivery and fails the sweep if exceeded.
+Both crash modes fail the attempt even if the handler catches `SimulatedCrashException`. Further effects are blocked, but `finally` and scope disposal still run, so an open transaction can roll back. Keep IDs, clocks, seed data and background work deterministic. `MaxEffects` defaults to 20 operations per delivery and fails the sweep if exceeded.
+
+### How many scenarios run?
+
+**Scenarios in a full sweep = N × K + D**
+
+- **N** counts operation occurrences in the clean trace.
+- **K** counts enabled fault kinds. Each kind gets its own scenario at each operation.
+- **D** counts enabled duplicate modes (`0`, `1` or `2`). Each mode starts from seed data and delivers the same message twice, sequentially or in parallel, with fault injection off. Parallel mode exercises the interleaving observed in that run.
+
+The demo enables two fault kinds and zero duplicate modes, so **5 × 2 + 0 = 10**. With short API defaults the same trace gives **5 × 3 + 2 = 17**. The clean delivery establishes the reference separately. Retries are attempts within an existing scenario.
 
 ## Custom state and replay
 
@@ -89,6 +98,8 @@ result.ShouldHaveNoViolations();
 - `MinimizeMessageWith` searches for a smaller failing input. `FaultSweep.Xunit` can generate a regression test with `result.GenerateXunitRegressionTest(options)`. Supply a collection and fixture exposing `CreateSweep(message)`.
 
 ## Adapter coverage
+
+PostgreSQL and Redis use runtime hooks on specific driver methods, which ties each adapter to the driver version below. The Npgsql hooks also see connections the handler opens directly. Kafka replaces the DI producer, while MongoDB wraps driver interfaces in a proxy.
 
 | Adapter | Register and track | Coverage and limits |
 |---|---|---|
