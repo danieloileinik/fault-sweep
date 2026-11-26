@@ -379,10 +379,10 @@ public sealed class SweepRunnerTests
 
         // Assert
         Assert.Equal(first.ToString(), second.ToString());
-        Assert.Contains("! #1 memory:increment: CrashAfter", first.ToDetailedString());
-        Assert.Contains("state $.Counter: ValueMismatch", first.ToString());
-        Assert.Contains("expected 1", first.ToString());
-        Assert.Contains("actual 2", first.ToString());
+        Assert.Contains("#1 memory:increment: CrashAfter", first.ToDetailedString());
+        Assert.Contains("state $.Counter:", first.ToString());
+        Assert.Contains("1 in clean run", first.ToString());
+        Assert.Contains("2 observed", first.ToString());
     }
 
     [Fact]

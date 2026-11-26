@@ -6,14 +6,16 @@ namespace FaultSweep.Verification;
 public sealed class VerificationResult
 {
     internal VerificationResult(
-        IEnumerable<SnapshotDifference> differences,
+        IEnumerable<DifferenceEvidence> differences,
         IEnumerable<InvariantViolation> invariantViolations
     )
     {
-        Differences = Array.AsReadOnly(differences.ToArray());
+        Evidence = Array.AsReadOnly(differences.ToArray());
+        Differences = Array.AsReadOnly(Evidence.Select(item => item.Difference).ToArray());
         InvariantViolations = Array.AsReadOnly(invariantViolations.ToArray());
     }
 
+    internal IReadOnlyList<DifferenceEvidence> Evidence { get; }
     public IReadOnlyList<SnapshotDifference> Differences { get; }
     public IReadOnlyList<InvariantViolation> InvariantViolations { get; }
     public bool HasViolations => Differences.Count > 0 || InvariantViolations.Count > 0;

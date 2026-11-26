@@ -23,7 +23,7 @@ internal sealed class SweepVerifier<TMessage>(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        List<SnapshotDifference> differences = [];
+        List<DifferenceEvidence> differences = [];
         foreach (SnapshotRegistration snapshot in snapshots)
         {
             StateSnapshot? reference =
@@ -32,7 +32,12 @@ internal sealed class SweepVerifier<TMessage>(
             if (reference is not null)
             {
                 differences.AddRange(
-                    snapshot.Comparer.Compare(snapshot.Name, reference, state[snapshot.Name])
+                    snapshot.Comparer.Compare(
+                        snapshot.Name,
+                        reference,
+                        state[snapshot.Name],
+                        !expected.ContainsKey(snapshot.Name)
+                    )
                 );
             }
         }

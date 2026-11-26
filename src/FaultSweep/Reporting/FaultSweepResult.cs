@@ -25,6 +25,7 @@ public sealed class FaultSweepResult
         );
     }
 
+    internal string? InputJson { get; set; }
     public IReadOnlyDictionary<string, StateSnapshot> BaselineState { get; }
     public IReadOnlyList<EffectTraceEntry> BaselineTrace { get; }
     public VerificationResult BaselineVerification { get; }

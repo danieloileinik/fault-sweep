@@ -102,6 +102,7 @@ public sealed class RegressionGenerationTests(RedisFixture fixture)
             violation => Assert.Contains("Xunit.Fact", violation.RegressionTest!)
         );
         Assert.Contains("Generated xUnit regression test:", result.ToDetailedString());
+        Assert.Equal(2, result.ToDetailedString().Split(source, StringSplitOptions.None).Length);
         Assert.DoesNotContain(source, result.ToString());
     }
 }

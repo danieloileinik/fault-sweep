@@ -155,7 +155,9 @@ internal sealed class SweepRunner<TMessage>(
             }
 
             throw new FaultSweepExecutionException(
-                "The replay effect does not match the clean baseline trace."
+                replay.EffectIndex > points.Length
+                    ? $"Requested replay effect #{replay.EffectIndex}. The clean run recorded {points.Length} effects."
+                    : $"Requested replay effect #{replay.EffectIndex} was {replay.ExpectedEffect}. The clean run recorded {points[replay.EffectIndex - 1].Effect}."
             );
         }
         IReadOnlyCollection<FaultKind> faultKinds = replay is null

@@ -107,7 +107,7 @@ public sealed class DuplicateDeliveryTests
         Assert.Equal(3, environment.State.DeliveryInstances.Distinct().Count());
         Assert.NotNull(result.MinimalDuplicateScenario);
         Assert.Throws<FaultSweepAssertionException>(result.ShouldHaveNoViolations);
-        Assert.Contains("Duplicate Parallel", result.ToString());
+        Assert.Contains("Parallel duplicate delivery", result.ToString());
     }
 
     [Theory]

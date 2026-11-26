@@ -15,7 +15,10 @@ public sealed class MessageFlowTests(PostgresFixture postgres, ITestOutputHelper
     [InlineData(MessageFlow.OutboxWithoutInbox, true)]
     [InlineData(MessageFlow.CorrectInboxOutbox, false)]
     [InlineData(MessageFlow.IdempotentUpsert, false)]
-    public async Task Finds_broken_message_flows_and_accepts_correct_flows(MessageFlow flow, bool expectedViolations)
+    public async Task Finds_broken_message_flows_and_accepts_correct_flows(
+        MessageFlow flow,
+        bool expectedViolations
+    )
     {
         // Arrange
         await using TestDatabase database = await postgres.CreateDatabaseAsync();
@@ -28,14 +31,23 @@ public sealed class MessageFlowTests(PostgresFixture postgres, ITestOutputHelper
         // Assert
         Assert.True(expectedViolations == result.HasViolations, result.ToString());
         Assert.Equal(result.BaselineTrace.Count * 2, result.Scenarios.Count);
-        Assert.All(result.Scenarios, scenario =>
-        {
-            Assert.False(scenario.Violations.HasFlag(ViolationKind.FaultNotReached), result.ToString());
-            Assert.True(scenario.Attempts[^1].Succeeded, result.ToString());
-        });
+        Assert.All(
+            result.Scenarios,
+            scenario =>
+            {
+                Assert.False(
+                    scenario.Violations.HasFlag(ViolationKind.FaultNotReached),
+                    result.ToString()
+                );
+                Assert.True(scenario.Attempts[^1].Succeeded, result.ToString());
+            }
+        );
         if (expectedViolations)
         {
-            Assert.Contains(result.Violations, violation => violation.Violations.HasFlag(ViolationKind.StateMismatch));
+            Assert.Contains(
+                result.Violations,
+                violation => violation.Violations.HasFlag(ViolationKind.StateMismatch)
+            );
             Assert.Throws<FaultSweepAssertionException>(result.ShouldHaveNoViolations);
         }
         else
@@ -54,20 +66,35 @@ public sealed class MessageFlowTests(PostgresFixture postgres, ITestOutputHelper
 
         // Act
         FaultSweepResult lost = await environment.Sweep(MessageFlow.LostEvent).RunAsync();
-        FaultSweepResult duplicated = await environment.Sweep(MessageFlow.PublishBeforeCommit).RunAsync();
+        FaultSweepResult duplicated = await environment
+            .Sweep(MessageFlow.PublishBeforeCommit)
+            .RunAsync();
         string lostReport = lost.ToString();
         output.WriteLine(lostReport);
 
         // Assert
-        Assert.Contains(lost.Violations, violation =>
-            violation.Scenario.Kind == FaultKind.CrashAfter &&
-            violation.Scenario.Point.Effect.Operation == "Commit" &&
-            violation.Differences.Any(difference =>
-                difference is { Snapshot: "produced", Kind: Snapshots.DifferenceKind.Missing }));
-        Assert.Contains(duplicated.Violations, violation => violation.Differences.Any(difference =>
-            difference is { Snapshot: "produced", Kind: Snapshots.DifferenceKind.Unexpected }));
-        Assert.Contains("produced $[0]: Missing", lostReport);
+        Assert.Contains(
+            lost.Violations,
+            violation =>
+                violation.Scenario.Kind == FaultKind.CrashAfter
+                && violation.Scenario.Point.Effect.Operation == "Commit"
+                && violation.Differences.Any(difference =>
+                    difference is { Snapshot: "produced", Kind: Snapshots.DifferenceKind.Missing }
+                )
+        );
+        Assert.Contains(
+            duplicated.Violations,
+            violation =>
+                violation.Differences.Any(difference =>
+                    difference
+                        is { Snapshot: "produced", Kind: Snapshots.DifferenceKind.Unexpected }
+                )
+        );
+        Assert.Contains("Missing Kafka event on \"order-placed\" (key 1)", lostReport);
+        Assert.Contains("Matching items: 1 in clean run, 0 observed", lostReport);
+        Assert.Contains("Duplicate Kafka event", duplicated.ToString());
+        Assert.Contains("Matching items: 1 in clean run, 2 observed", duplicated.ToString());
         Assert.Contains("CrashAfter", duplicated.ToString());
-        Assert.Contains("kafka:Produce", duplicated.ToString());
+        Assert.Contains("Kafka publish", duplicated.ToString());
     }
 }

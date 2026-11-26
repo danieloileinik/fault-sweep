@@ -1,219 +1,100 @@
 # FaultSweep
 
-[![CI](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml)
+[![CI](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/danieloileinik/fault-sweep/actions/workflows/ci.yml?query=branch%3Amain)
 [![NuGet](https://img.shields.io/nuget/v/FaultSweep.Postgres.svg)](https://www.nuget.org/packages/FaultSweep.Postgres)
-[![License: MIT](https://img.shields.io/github/license/danieloileinik/fault-sweep.svg)](LICENSE)
+[![License](https://img.shields.io/github/license/danieloileinik/fault-sweep.svg)](LICENSE)
 
-FaultSweep tests idempotency in .NET message handlers. It simulates failures at recorded database and broker operations, redelivers and duplicates the message, and checks the final state against a clean delivery.
+FaultSweep checks whether a .NET message handler recovers from interrupted operations and duplicate deliveries. It runs the same message through your application and compares the resulting database state and captured events with one successful delivery. A business invariant can also catch mistakes shared by every run.
+
+## Test your handler
+
+Add `FaultSweep.Postgres` to your .NET 10 integration test project. Point the application and `WithPostgres` at the same isolated database. Apply migrations and seed data first. FaultSweep copies the selected schema (default `public`), resets its tables and sequences before each scenario and restores the seed state at the end.
+
+```csharp
+using FaultSweep.Postgres;
+using Sweep = global::FaultSweep.FaultSweep;
+
+// Inside your integration test, using the application's service provider:
+var message = new CreateOrderCommand(OrderId: Guid.NewGuid(), CustomerId: 42);
+
+await Sweep.For<CreateOrderHandler>(factory.Services)
+    .WithPostgres(postgres.GetConnectionString())
+    .CheckInvariant("one order for this request", context =>
+        context.State["postgres"].Value.GetProperty("orders").EnumerateArray()
+            .Count(row => row.GetProperty("id").GetGuid() == message.OrderId) == 1)
+    .AssertIdempotentAsync(message);
+```
+
+Use `CheckIdempotencyAsync(message)` to inspect the result in code. For MediatR request handlers, keep the application's normal DI registrations. Each delivery goes through `ISender.Send` with its pipeline behaviors in a fresh scope.
 
 ## Try a lost Kafka event
 
-An order handler saves the order and its inbox entry in PostgreSQL, then publishes `OrderPlaced`. FaultSweep simulates a failure just after `COMMIT`. The next delivery sees the inbox entry and returns successfully. The order is saved, and the event is missing.
+The demo handler commits an order and its inbox entry, then publishes an event. If it crashes just after the commit, its retry sees the inbox entry and returns immediately. The order exists, but the publication is missing.
 
-```text
-FaultSweep: 5 effects, 10 scenarios, 2 violations.
-StateMismatch
-  produced $[0]: Missing, expected …, actual <missing>
-  #4 postgres:Commit CrashAfter [minimal] — 1/2 attempts succeeded (SimulatedCrashException)
-```
-
-From the repository root, run this with the **.NET 10 SDK** and **Docker running**. Testcontainers starts PostgreSQL, and the demo captures Kafka publications in memory.
+Run the demo from the repository root with the .NET 10 SDK and Docker. Testcontainers starts PostgreSQL and the Kafka adapter captures publications in memory.
 
 ```sh
 dotnet test tests/FaultSweep.Postgres.Tests/FaultSweep.Postgres.Tests.csproj --filter "FullyQualifiedName~MessageFlowTests" --logger "console;verbosity=detailed"
 ```
 
-The demo prints the missing-event report and checks that the transactional inbox/outbox case passes. [Demo tests](https://github.com/danieloileinik/fault-sweep/blob/main/tests/FaultSweep.Postgres.Tests/MessageFlowTests.cs) · [Example handler](https://github.com/danieloileinik/fault-sweep/blob/main/tests/FaultSweep.Postgres.Tests/PostgresKafkaHandler.cs)
-
-## Check idempotency in integration tests
-
-Install the PostgreSQL adapter in your test project.
-
-```sh
-dotnet add package FaultSweep.Postgres
+```text
+FaultSweep: 2 of 10 scenarios failed (5 operations in clean run).
+Failure 1 (2 scenarios)
+  Missing Kafka event on "order-placed" (key 1)
+    Matching items: 1 in clean run, 0 observed
+  Crash after PostgreSQL COMMIT (#4)
+    Attempt 1: simulated crash after PostgreSQL COMMIT (#4)
+    Attempt 2: handler returned successfully
+  Also seen with: Crash before Kafka publish (#5)
+Replay: .ReplayScenario(new ReplayScenario(4, FaultKind.CrashAfter))
+Full report: ToDetailedString()
 ```
 
-Use the application host and an isolated PostgreSQL database with migrations and seed data applied.
+The assertion groups scenarios with matching evidence. Call `ToDetailedString()` on the result or the caught `FaultSweepAssertionException` to see full values, SQL and the operations each attempt completed. The report uses data from the finished sweep. [Demo tests](https://github.com/danieloileinik/fault-sweep/blob/main/tests/FaultSweep.Postgres.Tests/MessageFlowTests.cs) · [Example handler](https://github.com/danieloileinik/fault-sweep/blob/main/tests/FaultSweep.Postgres.Tests/PostgresKafkaHandler.cs)
 
-```csharp
-[Fact]
-public async Task Create_order_is_idempotent()
-{
-    var message = new CreateOrderCommand(OrderId: Guid.NewGuid(), CustomerId: 42);
+When retries run out, inspect the last failed attempt for the application exception. If the target fault was never injected, compare the first attempt with the clean trace. If the clean run records zero operations, check the handler and its adapter registration.
 
-    await FaultSweep.For<CreateOrderHandler>(factory.Services)
-        .WithPostgres(
-            postgres.GetConnectionString(),
-            ignore: ["outbox.created_at"])
-        .AssertIdempotentAsync(message);
-}
-```
+## What gets tested
 
-`factory.Services` is the test service provider, `postgres` is e.g. a Testcontainers container, `message` is the request to deliver repeatedly. Add `using FaultSweep.Postgres;`. Because the class and namespace share a name, add `using FaultSweep = global::FaultSweep.FaultSweep;` in the test namespace or call `global::FaultSweep.FaultSweep.For`.
+The clean run records supported operations in order. Each fault scenario injects one failure at one recorded operation during the first delivery. Retries keep the partially modified state and stop when the handler returns successfully or exhausts its allowance (default **3 retries**). FaultSweep then compares snapshots and evaluates invariants. Each enabled duplicate scenario delivers two copies of the same message, sequentially or in parallel, from fresh seed data.
 
-The short API compares the recovered state with a successful single delivery. Add business invariants in the same chain, so a wrong handler cannot pass by matching its own baseline:
-
-```csharp
-    .CheckInvariant("exactly one order", context =>
-        context.State["postgres"].Value.GetProperty("orders").GetArrayLength() == 1)
-    .CheckInvariantAsync("one logical event", async (context, token) =>
-    {
-        var queries = context.Services.GetRequiredService<IOrderQueries>();
-        return await queries.CountEventsAsync(message.OrderId, token) == 1;
-    })
-```
-
-Invariants run after the baseline and after every scenario, including exhausted retries. `context.State` holds snapshots; `context.Services` is a separate scope for read-only queries. The short API has no typed message in the context, so capture it from the test; the detailed builder exposes `context.Message`.
-
-## How scenarios work
-
-1. Restore initial data and run the request once with no faults. Record the ordered operations (**effects**) and the resulting state.
-2. Number effects from 1. Each occurrence counts separately, even for identical SQL. PostgreSQL commands (including reads) are effects, an explicit commit is another effect, an Npgsql batch is one effect. Operations intercepted during delivery scope disposal also count. Setup, restore, snapshot and invariant queries are excluded.
-3. For every pair **effect × fault kind**, restore initial data and inject exactly one fault at that effect during the first delivery.
-4. Retry the same request in a fresh DI scope with no further faults, keeping the partially modified state. Stop on success or at the redelivery limit, then compare state and check invariants.
-5. Each enabled duplicate mode runs as its own scenario from initial data, with no faults: two deliveries of the same request, sequential or parallel. Failed deliveries can be retried.
-
-| Fault | Behavior at the selected effect |
+| Fault | What the handler experiences |
 |---|---|
-| `CrashBefore` | Throws `SimulatedCrashException` before the underlying operation. |
-| `CrashAfter` | Runs the operation, then throws `SimulatedCrashException` before returning to the caller. |
-| `AppliedButFailed` | Runs the operation, then throws a recoverable `AppliedButFailedException` (derives from `TimeoutException`). |
+| `CrashBefore` | FaultSweep interrupts the delivery before the operation runs. |
+| `CrashAfter` | The operation completes, then FaultSweep interrupts the delivery. |
+| `AppliedButFailed` | The operation completes, but the caller receives a recoverable timeout. |
 
-Faults interrupt operations at their boundaries and do not terminate the process: `finally` blocks and scope disposal still run. A recorded crash fails the delivery even if the application catches the exception, and later operations in that delivery are blocked. An uncommitted `UPDATE` can still roll back on disposal; a completed `COMMIT` has already persisted.
+A simulated crash stops further effects in that delivery. Scope disposal and `finally` still run, so an open transaction can roll back. Coverage follows the clean trace, the configured checks and the concurrent schedules actually exercised. Keep IDs, clocks, seed data and background work deterministic. `MaxEffects` defaults to 20 operations per delivery and fails the sweep if exceeded.
 
-```
-fault scenarios = N × K          N = effects in the baseline, K = enabled fault kinds (default 3)
-all scenarios   = N × K + D      D = enabled duplicate modes (0, 1 or 2)
-```
+## Custom state and replay
 
-The short API enables both duplicate modes (8 effects → 8 × 3 + 2 = 26 scenarios). The detailed builder enables none by default (24 scenarios) until `WithDuplicateDeliveries()` is called. Choose kinds and modes with `FaultSweepOptions.FaultKinds` and `DuplicateDeliveries`. `WithOptions` replaces all options, duplicate modes included, so call `WithDuplicateDeliveries()` after it. `MaxEffects` (default 20 per delivery) is a guard: exceeding it fails the sweep instead of truncating or sampling the trace.
-
-FaultSweep explores effect boundaries seen in the baseline, one fault per scenario. It does not enumerate fault combinations or all concurrent schedules.
-
-## MediatR
-
-`IRequestHandler<TRequest, TResponse>` and `IRequestHandler<TRequest>` are detected automatically. Every delivery (baseline, fault retries, duplicates) goes through `ISender.Send`, resolved from the delivery's scope, so your registered pipeline behaviors (validation, transactions, `SaveChanges`) run. Do not call `handler.Handle` manually.
-
-- The test host must contain the application's normal MediatR registrations; FaultSweep registers nothing itself and imposes no MediatR version (tested with 12.5.0 and 14.1.0).
-- A missing `ISender` fails the baseline, with no fallback to a direct handler call.
-- Notifications and streaming handlers are not request sweeps.
-
-## Detailed builder
-
-For other stores, custom state or finer control:
+Use the detailed builder when you need multiple adapters, your own reset, explicit expectations or replay. Register the adapter in the test host first.
 
 ```csharp
-var builder = Host.CreateApplicationBuilder();
-builder.Services.AddScoped<PaymentHandler>();
-builder.Services.AddFaultSweepPostgres(testConnectionString);
-using var host = builder.Build();
-
-var sweep = FaultSweep.FaultSweep.For<PaymentHandler>(host)
-    .WithMessage(new Payment(PaymentId: 42, Amount: 100))
+var sweep = Sweep.For<CreateOrderHandler>(host)
+    .WithMessage(message)
     .ResetWith(ResetAndSeedAsync)
-    .TrackPostgres(tables: ["payments", "balances"], ignore: ["created_at"])
-    .WithDuplicateDeliveries()
-    .CheckInvariantAsync("one debit for this payment", async (context, token) =>
-    {
-        var payments = context.Services.GetRequiredService<IPaymentQueries>();
-        return await payments.CountDebitsAsync(context.Message.PaymentId, token) == 1;
-    });
+    .TrackPostgres(tables: ["orders", "inbox"])
+    .TrackProduced()
+    .WithDuplicateDeliveries();
 
 var result = await sweep.RunAsync();
 result.ShouldHaveNoViolations();
 ```
 
-- **Handlers:** implement `IMessageHandler<TMessage>`, use a MediatR handler, or adapt anything with `HandleWith`. An explicit `HandleWith` overrides automatic MediatR dispatch, so keep `ISender.Send` in it.
-- **Reset:** `ResetAndSeedAsync(IServiceProvider, CancellationToken)` returns `ValueTask` and must reset every relevant store and seed identical data before each scenario. Deliveries use fresh DI scopes disposed before snapshots and retries.
-- **Success criteria:** `ExpectState(name, snapshot)` supplies an expected snapshot (message-based factories supported); `WithOptions(new FaultSweepOptions { CompareWithBaseline = false })` disables baseline comparison; `TrackState` and `TrackSnapshot<TProvider>` capture custom state; `SnapshotComparisonOptions` controls ignored fields, array order and custom comparators.
-- **Events:** an outbox row and a published event are separate facts. Use `TrackProduced(ArrayComparison.Set)` when identical duplicate events are acceptable.
+- `ResetWith` must restore every relevant store to the same seed before each scenario. Use isolated stores for sweeps running on separate service providers.
+- The short API enables both duplicate modes by default. The detailed builder opts in with `WithDuplicateDeliveries()`. `WithOptions` replaces the options, including duplicate modes. On the short API, set `DuplicateDeliveries` explicitly when supplying options.
+- `TrackState` captures custom state. `ExpectState` replaces the clean reference for one snapshot. Invariants run after the clean delivery and each scenario, including exhausted retries. Use `CheckInvariantAsync` for read-only queries through `context.Services`.
+- To reproduce a failure, apply the reported `ReplayScenario` or `ReplayDuplicates` call before `RunAsync()`. The run repeats the baseline and the selected scenario. An optional `ExpectedEffect` checks that the replay still targets the same operation.
+- `MinimizeMessageWith` searches for a smaller failing input. `FaultSweep.Xunit` can generate a regression test with `result.GenerateXunitRegressionTest(options)`. Supply a collection and fixture exposing `CreateSweep(message)`.
 
-## Adapters
+## Adapter coverage
 
-| Package | Register | Track state | Hooked version |
-|---|---|---|---|
-| `FaultSweep.Postgres` | `AddFaultSweepPostgres(...)` (not needed for `WithPostgres`) | `TrackPostgres(...)` | Npgsql 10.0.3 |
-| `FaultSweep.Redis` | `AddFaultSweepRedis(connection)` | `TrackRedis(prefix: ...)` | StackExchange.Redis 3.4.20 |
-| `FaultSweep.Kafka` | `AddFaultSweepKafka<TKey, TValue>()` | `TrackProduced()` | DI producer |
-| `FaultSweep.Mongo` | `AddFaultSweepMongo(database)` | `TrackMongo(collections: [...])` | decorated `IMongoDatabase` |
+| Adapter | Register and track | Coverage and limits |
+|---|---|---|
+| PostgreSQL | `AddFaultSweepPostgres` + `TrackPostgres`, or automatic `WithPostgres` | Npgsql **10.0.3**. EF Core, Dapper and direct commands. Reads count, each batch is one effect and explicit commits count separately. Tracked tables require primary keys. COPY, ambient transactions and stored-procedure internals are outside coverage. |
+| Redis | `AddFaultSweepRedis` + `TrackRedis(prefix: …)` | StackExchange.Redis **3.4.20**. Snapshots preserve binary values and ignore TTL. Transactions, batches, fire-and-forget and unsupported raw commands are rejected. Administrative server writes bypass interception. |
+| Kafka | `AddFaultSweepKafka<TKey, TValue>` + `TrackProduced()` | Captures the DI producer in memory. Compares messages including duplicate counts, keys, payloads and headers. Use `ArrayComparison.Set` only when identical duplicates are acceptable. Direct producers bypass capture. |
+| MongoDB | `AddFaultSweepMongo` + `TrackMongo(collections: …)` | Resolve the decorated database or wrap collections with `InstrumentMongo`. Supports acknowledged single-document writes. Raw clients bypass interception. Transactions, bulk and multi-document writes are rejected. |
 
-- **PostgreSQL:** hooks cover EF Core, Dapper and direct connections. Unsupported: `TransactionScope`, COPY/import, stored-procedure internals, batch error barriers. Tracked tables need primary keys. Automatic restoration rejects tables that use `INHERITS` before resetting data. Snapshots share a repeatable-read transaction. Sequence changes from handler operations survive transaction rollback.
-- **Redis:** snapshots cover strings, hashes, lists, sets, sorted sets and streams (binary-safe values, TTL ignored). Rejected: transactions, batches, `FireAndForget`, pub/sub, stream-group mutations, unsupported raw commands. Administrative server writes bypass interception.
-- **Kafka:** captures the DI producer's messages in memory with no network sends. Snapshots include keys, payloads, topics, requested partitions and headers; comparison is a multiset (nested arrays stay ordered). Captures and per-partition offsets reset between scenarios and persist across retries. Transactions are rejected; directly constructed producers bypass capture.
-- **MongoDB:** resolve the decorated `IMongoDatabase` or wrap collections with `InstrumentMongo`. The decorated database keeps interception when you obtain another database through its `Client` property. Separately constructed raw clients bypass interception. Acknowledged single-document writes are supported; transactions, bulk and multi-document writes, aggregation and administrative writes are rejected. Snapshots preserve BSON types, sort by `_id` and assume quiescence across collections.
-
-## Reading failures and reproducing
-
-The assertion message groups scenarios that report the same violation and show the same details. In this run, both fault scenarios and both duplicate-delivery modes left the counter at `2` instead of `1`.
-
-```text
-FaultSweep: 1 effects, 5 scenarios, 4 violations.
-StateMismatch
-  state $.Counter: ValueMismatch, expected 1, actual 2
-  #1 postgres:Command CrashAfter [minimal] — 1/2 attempts succeeded (SimulatedCrashException)
-  #1 postgres:Command AppliedButFailed — 1/2 attempts succeeded (AppliedButFailedException)
-  Duplicate Sequential [minimal], Duplicate Parallel — 2/2 attempts succeeded
-Full report: ToDetailedString()
-```
-
-Each group shows up to three state differences and three failed invariants, with values and messages shortened to 100 characters. The `[minimal]` marker identifies the scenario selected for reproduction.
-
-Call `ToDetailedString()` on the result or on the caught `FaultSweepAssertionException` to inspect individual deliveries without rerunning the sweep. This excerpt shows the clean run and the first failing scenario.
-
-```text
-FaultSweep: 1 effects, 5 scenarios, 4 violations.
-Clean baseline trace:
-    - #1 postgres:Command (UPDATE accounts SET balance = balance - 1): Succeeded
-Minimal scenario: effect #1, CrashAfter, 2 deliveries.
-  Message: {"Amount":10}
-  Candidates: 0; budget exhausted: False
-
-Effect #1 postgres:Command (UPDATE accounts SET balance = balance - 1): CrashAfter
-  Violations: StateMismatch
-  Attempts: 2; succeeded: 1; failed: 1
-  Delivery 1: SimulatedCrashException: Simulated CrashAfter at effect #1: postgres:Command (UPDATE accounts SET balance = balance - 1).
-    ! #1 postgres:Command (UPDATE accounts SET balance = balance - 1): CrashAfter
-  Delivery 2: success
-    - #1 postgres:Command (UPDATE accounts SET balance = balance - 1): Succeeded
-  state $.Counter: ValueMismatch
-    expected: 1
-    actual:   2
-```
-
-The full report also includes any generated regression tests. For a `RedeliveryLimitExceeded` violation, look at the final failed attempt to see why recovery stopped.
-
-- **`MinimalScenario` / `MinimalDuplicateScenario`** identify the earliest failing fault and a failing duplicate mode.
-- **`ReplayScenario(new ReplayScenario(index, kind))`** reruns one fault; pass `ExpectedEffect` to detect a changed trace. **`ReplayDuplicates(mode)`** reruns one duplicate mode; keep any test barriers. Both still run a baseline and skip all other scenarios.
-- **`MinimizeMessageWith(shrink, complexity)`** searches for a smaller failing message within `MaxMinimizationRuns`, skipping invalid baselines.
-- **xUnit:** `result.GenerateXunitRegressionTest(options)` from `FaultSweep.Xunit` generates a regression test. Set `FixtureTypeName` and `CollectionName` in `XunitRegressionOptions`; the fixture must expose `CreateSweep(message)` with the same reset, adapters and checks. `AddFaultSweepXunit(options)` includes the source in reports.
-
-## Test environment and limits
-
-- Use isolated stores, deterministic seeds and stable traces; control random IDs, clocks and background work. Sweeps sharing a service provider are serialized; separate providers need separate environments.
-- FaultSweep simulates interruption at supported atomic operations. It does not kill processes, inject network faults or model broker rebalances.
-- A passing sweep proves the configured state and checks only for the scenarios exercised.
-
-## Upgrading from 0.1.x
-
-- In invariant callbacks, use `VerificationContext.IsBaseline` and `VerificationContext.Duplicates` to identify the run type. Fault details are available in `FaultScenarioResult.Scenario` after the sweep.
-- Regenerate Redis replay tests whose `ExpectedEffect` describes a raw command such as `Execute` or `ExecuteResp`. The effect now identifies the Redis command and ordered keys.
-
-## Development
-
-```
-dotnet restore FaultSweep.slnx
-dotnet build FaultSweep.slnx -c Release --no-restore -m:1
-dotnet test FaultSweep.slnx -c Release --no-build --no-restore -m:1
-dotnet pack FaultSweep.slnx -c Release --no-build --no-restore -o artifacts/packages
-```
-
-Check the MediatR pipeline tests against another installed version:
-
-```
-dotnet test tests/FaultSweep.Postgres.Tests/FaultSweep.Postgres.Tests.csproj -p:MediatRTestVersion=14.1.0 --filter FullyQualifiedName~MediatRSweepTests
-```
-
-
-## License
-
-MIT
+Run the full suite with `dotnet test FaultSweep.slnx` and Docker running. [Build and packaging workflow](https://github.com/danieloileinik/fault-sweep/blob/main/.github/workflows/ci.yml)

@@ -9,6 +9,8 @@ public sealed record SnapshotComparisonOptions
     public IReadOnlyCollection<string> IgnoredProperties { get; init; } = [];
     /// <summary>Controls equality of the root array, such as a produced event collection.</summary>
     public ArrayComparison ArrayComparison { get; init; } = ArrayComparison.Sequence;
+    /// <summary>Describes unmatched root collection items in failure reports.</summary>
+    public Func<JsonElement, string?>? DescribeItem { get; init; }
     /// <summary>Array modes for exact paths. Nested payload arrays remain sequences by default.</summary>
     public IReadOnlyDictionary<string, ArrayComparison> ArrayComparisons { get; init; } =
         new Dictionary<string, ArrayComparison>(StringComparer.Ordinal);

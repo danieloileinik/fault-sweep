@@ -35,7 +35,10 @@ public sealed class MinimizationTests
         Assert.Equal(FaultKind.CrashAfter, minimum.Result.Scenario.Kind);
         Assert.True(Assert.Single(replayed.Scenarios).HasViolation);
         Assert.False(minimum.BudgetExhausted);
-        Assert.Contains("Minimal scenario:", result.ToString());
+        Assert.Contains("Reduced input:", result.ToString());
+        string reducedReport = result.ToDetailedString().Split("Reduced input:")[1];
+        Assert.Contains("1 in clean run, 2 observed", reducedReport);
+        Assert.DoesNotContain("10 in clean run, 20 observed", reducedReport);
     }
     [Fact]
     public async Task Bounds_cyclic_shrinkers_and_rejects_moved_replay_points()

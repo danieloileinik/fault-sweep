@@ -18,13 +18,13 @@ public sealed class ReportTests
         string report = result.ToString();
 
         // Assert
-        Assert.Contains("#1 postgres:Command CrashAfter", report);
-        Assert.Contains("1/2 attempts succeeded", report);
-        Assert.Contains("SimulatedCrashException", report);
-        Assert.Contains("AppliedButFailedException", report);
-        Assert.Contains("state $.Counter: ValueMismatch", report);
-        Assert.Contains("expected 1", report);
-        Assert.Contains("actual 2", report);
+        Assert.Contains("Crash after postgres:Command (#1)", report);
+        Assert.Contains("Attempt 2: handler returned successfully", report);
+        Assert.Contains("Attempt 1: simulated crash after", report);
+        Assert.Contains("Lost acknowledgement after", report);
+        Assert.Contains("state $.Counter:", report);
+        Assert.Contains("1 in clean run", report);
+        Assert.Contains("2 observed", report);
         Assert.DoesNotContain(Sql, report);
         Assert.DoesNotContain("Delivery 1:", report);
         Assert.DoesNotContain("Message:", report);
@@ -44,11 +44,11 @@ public sealed class ReportTests
 
         // Assert
         Assert.Contains(Sql, detailed);
-        Assert.Contains("Clean baseline trace:", detailed);
-        Assert.Contains("Delivery 1: SimulatedCrashException", detailed);
-        Assert.Contains("Delivery 2: success", detailed);
-        Assert.Contains("! #1 postgres:Command", detailed);
-        Assert.Contains("Message:", detailed);
+        Assert.Contains("Clean run:", detailed);
+        Assert.Contains("Attempt 1: simulated crash after", detailed);
+        Assert.Contains("Attempt 2: handler returned successfully", detailed);
+        Assert.Contains("#1 postgres:Command", detailed);
+        Assert.Contains("Input message:", detailed);
         Assert.Equal(detailed, result.ToDetailedString());
         Assert.Equal(resets, environment.State.Resets);
     }
@@ -89,16 +89,17 @@ public sealed class ReportTests
 
         // Assert
         Assert.Equal(2, result.DuplicateViolations.Count);
-        Assert.Single(
-            report.Split(Environment.NewLine), line => line.Contains("state $.Counter")
+        Assert.Single(report.Split(Environment.NewLine), line => line.Contains("state $.Counter"));
+        Assert.Contains(
+            "Replay: .ReplayScenario(new ReplayScenario(1, FaultKind.CrashAfter))",
+            report
         );
-        Assert.Contains("CrashAfter [minimal]", report);
-        Assert.Contains("Duplicate Sequential", report);
-        Assert.Contains("Duplicate Parallel", report);
-        Assert.Contains("2/2 attempts succeeded", report);
+        Assert.Contains("Sequential duplicate delivery", report);
+        Assert.Contains("Parallel duplicate delivery", result.ToDetailedString());
+        Assert.Contains("+1 more scenario", report);
         Assert.DoesNotContain(Sql, report);
         Assert.DoesNotContain("Delivery 1:", report);
-        Assert.Contains("Delivery 2:", result.ToDetailedString());
+        Assert.Contains("Delivery 2, attempt 1:", result.ToDetailedString());
     }
 
     [Fact]
@@ -112,7 +113,10 @@ public sealed class ReportTests
                 await increment.Action(state, effects, token);
                 if (state.Counter > 1)
                 {
-                    throw new InvalidOperationException(Sql);
+                    throw new InvalidOperationException(
+                        Sql,
+                        new ArgumentException("Invalid currency")
+                    );
                 }
             }
         );
@@ -122,10 +126,11 @@ public sealed class ReportTests
         FaultSweepResult result = await environment.CreateSweep().RunAsync();
 
         // Assert
-        Assert.Contains("0/4 attempts succeeded", result.ToString());
-        Assert.Contains("InvalidOperationException ×3", result.ToString());
+        Assert.Contains("Handler still failing after the last retry", result.ToString());
+        Assert.Contains("Attempt 4: ArgumentException: Invalid currency", result.ToString());
         Assert.DoesNotContain(Sql, result.ToString());
         Assert.Contains($"InvalidOperationException: {Sql}", result.ToDetailedString());
+        Assert.Contains("ArgumentException: Invalid currency", result.ToDetailedString());
     }
 
     [Fact]
@@ -162,6 +167,82 @@ public sealed class ReportTests
         Assert.DoesNotContain("rule 5", report);
         Assert.Contains("payload-end", detailed);
         Assert.Contains("rule 5", detailed);
+    }
+
+    [Fact]
+    public async Task Groups_using_full_values_when_previews_are_identical()
+    {
+        // Arrange
+        int updates = 0;
+        string prefix = new string('x', 110);
+        using var environment = new SweepTestEnvironment(
+            new TestBehavior(
+                async (_, effects, token) =>
+                {
+                    await SweepTestEnvironment.Apply(effects, "first", () => updates++, token);
+                    await SweepTestEnvironment.Apply(effects, "second", () => updates++, token);
+                }
+            )
+        );
+
+        // Act
+        var result = await environment
+            .CreateSweep()
+            .ResetWith(
+                (_, _) =>
+                {
+                    updates = 0;
+                    return ValueTask.CompletedTask;
+                }
+            )
+            .WithOptions(new FaultSweepOptions { FaultKinds = [FaultKind.CrashAfter] })
+            .TrackState(
+                "value",
+                (_, _) => ValueTask.FromResult(Snapshots.StateSnapshot.From(prefix + updates))
+            )
+            .RunAsync();
+
+        // Assert
+        Assert.Contains("Failure 2 (1 scenario)", result.ToString());
+        Assert.Contains(prefix + "3", result.ToDetailedString());
+        Assert.Contains(prefix + "4", result.ToDetailedString());
+    }
+
+    [Fact]
+    public async Task Labels_a_retry_with_its_logical_duplicate_delivery()
+    {
+        // Arrange
+        int calls = 0;
+        using var environment = new SweepTestEnvironment(
+            new TestBehavior(
+                (state, effects, token) =>
+                {
+                    if (++calls == 2)
+                    {
+                        throw new InvalidOperationException("Retry this delivery");
+                    }
+                    return SweepTestEnvironment.Apply(
+                        effects,
+                        "debit",
+                        () => state.Counter++,
+                        token
+                    );
+                }
+            )
+        );
+
+        // Act
+        var result = await environment
+            .CreateSweep()
+            .ReplayDuplicates(DuplicateDeliveryMode.Sequential)
+            .RunAsync();
+
+        // Assert
+        string report = result.ToDetailedString();
+        Assert.Contains("Delivery 1, attempt 2: handler returned successfully", report);
+        Assert.Contains("Delivery 2, attempt 1: handler returned successfully", report);
+        Assert.DoesNotContain("Delivery 3", report);
+        Assert.DoesNotContain("Shrink candidates", report);
     }
 
     [Fact]

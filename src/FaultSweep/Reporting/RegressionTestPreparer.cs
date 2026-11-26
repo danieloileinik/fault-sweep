@@ -11,6 +11,11 @@ internal sealed class RegressionTestPreparer<TMessage>(IRegressionTestGenerator?
         SweepMinimum<TMessage>? minimum
     )
     {
+        if (result.HasViolations)
+        {
+            result.InputJson = SerializeMessage(runMessage);
+        }
+
         if (minimum is not null)
         {
             AttachMinimum(result, minimum);
@@ -19,7 +24,7 @@ internal sealed class RegressionTestPreparer<TMessage>(IRegressionTestGenerator?
         if (result.BaselineVerification.HasViolations)
         {
             result.BaselineRegressionCase = new RegressionTestCase(
-                SerializeMessage(runMessage),
+                result.InputJson,
                 CSharpTypeName.Format(typeof(TMessage)),
                 null
             );
@@ -37,13 +42,15 @@ internal sealed class RegressionTestPreparer<TMessage>(IRegressionTestGenerator?
 
         foreach (FaultScenarioResult violation in result.Violations)
         {
-            violation.RegressionTest ??= generator.Generate(CreateCase(runMessage, violation));
+            violation.RegressionTest ??= generator.Generate(
+                CreateCase(result.InputJson, violation)
+            );
         }
         foreach (DuplicateScenarioResult violation in result.DuplicateViolations)
         {
             violation.RegressionTest ??= generator.Generate(
                 new RegressionTestCase(
-                    SerializeMessage(runMessage),
+                    result.InputJson,
                     CSharpTypeName.Format(typeof(TMessage)),
                     null,
                     violation.Mode
@@ -52,12 +59,9 @@ internal sealed class RegressionTestPreparer<TMessage>(IRegressionTestGenerator?
         }
     }
 
-    private static RegressionTestCase CreateCase(
-        TMessage runMessage,
-        FaultScenarioResult violation
-    ) =>
-        new(
-            SerializeMessage(runMessage),
+    private static RegressionTestCase CreateCase(string? json, FaultScenarioResult violation) =>
+        new RegressionTestCase(
+            json,
             CSharpTypeName.Format(typeof(TMessage)),
             new ReplayScenario(
                 violation.Scenario.Point.Index,
@@ -98,7 +102,7 @@ internal sealed class RegressionTestPreparer<TMessage>(IRegressionTestGenerator?
             );
             if (generator is not null)
             {
-                scenario.RegressionTest = generator.Generate(CreateCase(minimum.Message, scenario));
+                scenario.RegressionTest = generator.Generate(CreateCase(json, scenario));
             }
         }
 

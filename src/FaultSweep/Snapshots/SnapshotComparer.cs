@@ -4,6 +4,7 @@ namespace FaultSweep.Snapshots;
 
 internal sealed class SnapshotComparer
 {
+    private readonly Func<JsonElement, string?>? describeItem;
     private readonly HashSet<string> ignoredProperties;
     private readonly Dictionary<string, Func<JsonElement, JsonElement, bool>> comparers;
     private readonly ArrayComparison arrayComparison;
@@ -36,6 +37,7 @@ internal sealed class SnapshotComparer
             );
         }
 
+        describeItem = options.DescribeItem;
         arrayComparison = options.ArrayComparison;
         arrayComparisons = new Dictionary<string, ArrayComparison>(
             options.ArrayComparisons,
@@ -54,16 +56,66 @@ internal sealed class SnapshotComparer
         }
     }
 
-    public IReadOnlyList<SnapshotDifference> Compare(
+    public IReadOnlyList<DifferenceEvidence> Compare(
         string name,
         StateSnapshot expected,
-        StateSnapshot actual
+        StateSnapshot actual,
+        bool fromCleanRun
     ) =>
         Array.AsReadOnly(
             FindDifferences("$", expected.Value, actual.Value)
-                .Select(difference => difference.Format(name))
+                .Select(difference =>
+                    Describe(difference, name, expected.Value, actual.Value, fromCleanRun)
+                )
                 .ToArray()
         );
+
+    private DifferenceEvidence Describe(
+        JsonDifference difference,
+        string name,
+        JsonElement expected,
+        JsonElement actual,
+        bool fromCleanRun
+    )
+    {
+        SnapshotDifference formatted = difference.Format(name);
+        var evidence = new DifferenceEvidence(formatted, fromCleanRun);
+        if (
+            describeItem is null
+            || formatted.Kind == DifferenceKind.ValueMismatch
+            || expected.ValueKind != JsonValueKind.Array
+            || actual.ValueKind != JsonValueKind.Array
+            || !difference.Path.StartsWith("$[", StringComparison.Ordinal)
+            || difference.Path.IndexOf(']') != difference.Path.Length - 1
+        )
+        {
+            return evidence;
+        }
+
+        JsonElement item =
+            formatted.Kind == DifferenceKind.Missing ? difference.Expected : difference.Actual;
+        evidence = evidence with { ItemDescription = describeItem(item) };
+        if (
+            evidence.ItemDescription is null
+            || arrayComparisons.GetValueOrDefault("$", arrayComparison) != ArrayComparison.Multiset
+            || comparers.Count > 0
+            || ignoredProperties.Count > 0
+            || arrayComparisons.Count > 0
+        )
+        {
+            return evidence;
+        }
+
+        return evidence with
+        {
+            ReferenceCount = expected
+                .EnumerateArray()
+                .Count(other => JsonElement.DeepEquals(item, other)),
+            ActualCount = actual
+                .EnumerateArray()
+                .Count(other => JsonElement.DeepEquals(item, other)),
+        };
+    }
 
     private IEnumerable<JsonDifference> FindDifferences(
         string path,

@@ -305,7 +305,7 @@ public sealed class VerificationTests
         Assert.NotNull(result.BaselineRegressionCase);
         Assert.Null(result.BaselineRegressionCase.Scenario);
         Assert.Throws<FaultSweepAssertionException>(result.ShouldHaveNoViolations);
-        Assert.Contains("0 scenarios, 1 violations", result.ToString());
+        Assert.Contains("0 of 0 scenarios failed", result.ToString());
     }
 
     [Fact]
